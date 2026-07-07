@@ -2,19 +2,22 @@
 
 > Append-only log of non-obvious choices and *why*. Newest at top.
 
-## 2026-07-07 — Back-translation model: qwen3-14b-128k with reasoning OFF
-Tested the LM Studio server (172.20.10.7:1234) for the FI→EN back-translation step:
-- `qwen3.5-9b` and `gpt-oss-20b`: won't load — need ~23.5 GB, over the 24 GB guardrail.
-- `qwen3-14b-128k`: the only capable model that fits. **Chosen.**
-- Gotcha: Qwen3 is a *reasoning* model — by default it spends the token budget in a
-  `<think>` block and returns empty `content`. Fix: append `/no_think` to the system
-  prompt. That also made it ~5x faster (30s vs 140s for 5 lines).
-- It wraps output in quotes despite being told not to → we strip quotes + stray
-  `<think>` tags in `synth._strip_output`.
-Quality on hard Helsinki slang: ~4.5/5 (nailed stadi→Helsinki, keikka→gig, skeidaa,
-broidit; missed *friidu*=girl, read as "fries"). Good enough — it's the input side
-of the pair, and the FI target stays the real lyric. Default set in `config.py`.
-Note: LM Studio unloads on idle; the next request auto-reloads (brief first-call lag).
+## 2026-07-07 — Back-translation model: gpt-oss-20b default (qwen3-14b fallback)
+Tested the LM Studio server (172.20.10.7:1234) for the FI→EN back-translation step.
+After relaxing LM Studio's memory guardrails, **`gpt-oss-20b`** loads and runs best
+on this box (MXFP4 quant → memory-light despite "20b"). **Chosen as default.**
+- Both candidates are reasoning models and return empty `content` unless allowed to
+  finish thinking. Fixes in `back_translate_line`:
+  - big token budget (`_MAX_TOKENS=1024`) so gpt-oss reaches its answer
+    (was `finish_reason=length` → empty at 256).
+  - `reasoning_effort=low` to keep it brief.
+  - qwen-style models additionally get `/no_think` appended (skips reasoning; faster).
+  - `_strip_output` removes leaked `<think>` blocks and smart/plain wrapping quotes.
+- Quality (hard Helsinki slang) is ~tied: gpt-oss phrasing slightly more natural
+  ("heading out for a gig", keeps "Stadi"), qwen a touch more literal. Both miss
+  *friidu*=girl. gpt-oss ~11s/line (reasoning budget), qwen ~6s/line.
+- Swappable via `LMSTUDIO_MODEL` env; default in `config.py`. LM Studio unloads on
+  idle → first call reloads (brief lag).
 
 ## 2026-07-07 — Data sources: OpenSubtitles + Genius rap + synthetic back-translation
 Personal project, public web is fair game. Three complementary sources:

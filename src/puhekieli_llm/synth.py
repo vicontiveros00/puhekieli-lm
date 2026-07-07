@@ -36,17 +36,26 @@ _SYSTEM = (
     "You are a translator. You are given a line of colloquial/slang Finnish "
     "(spoken register, often Helsinki rap lyrics). Translate it into natural, "
     "everyday English. Output ONLY the English translation, no quotes, no notes. "
-    "If the line is already English or nonsense, repeat it unchanged. /no_think"
+    "If the line is already English or nonsense, repeat it unchanged."
 )
+
+# Both models we tested (qwen3-14b, gpt-oss-20b) are reasoning models. They must
+# be allowed to finish thinking or `content` comes back empty:
+#   - qwen3: honors `/no_think` to skip reasoning entirely (fast).
+#   - gpt-oss: ignores /no_think but reasons briefly, THEN answers — it just needs
+#     a big enough token budget to reach the answer (else finish_reason=length).
+# So we keep the prompt clean and give a generous max_tokens. `/no_think` is
+# appended automatically for qwen-style models (harmless to others via strip).
+_MAX_TOKENS = 1024  # room for reasoning models to think AND answer
 
 
 def _strip_output(text: str) -> str:
     """Tidy model output: drop wrapping quotes and stray reasoning tags."""
     text = text.strip()
-    # some reasoning models leak an empty <think></think> block
+    # some reasoning models leak a <think>...</think> block into content
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     # strip a single pair of surrounding quotes the model likes to add
-    if len(text) >= 2 and text[0] in "\"'" and text[-1] == text[0]:
+    if len(text) >= 2 and text[0] in "\"'“‘" and text[-1] in "\"'”’":
         text = text[1:-1].strip()
     return text
 
@@ -61,17 +70,23 @@ def back_translate_line(fi: str, client=None, model: str | None = None,
                         temperature: float = 0.2) -> str:
     """FI -> EN for a single line via the local LLM.
 
-    Note: reasoning models (e.g. Qwen3) must be told not to think, or they burn
-    the token budget on a <think> block and return empty content. `_SYSTEM` ends
-    with /no_think for that reason; we also strip any leaked tags/quotes.
+    Reasoning models (qwen3, gpt-oss) must be allowed to finish thinking or
+    `content` comes back empty. We give a generous token budget (_MAX_TOKENS) and,
+    for qwen-style models, append `/no_think` to skip reasoning entirely for speed.
+    Non-reasoning models are unaffected.
     """
     client = client or _client()
+    model = model or LMSTUDIO_MODEL
+    system = _SYSTEM
+    if "qwen" in model.lower():
+        system = system + " /no_think"
     resp = client.chat.completions.create(
-        model=model or LMSTUDIO_MODEL,
+        model=model,
         temperature=temperature,
-        max_tokens=256,
+        max_tokens=_MAX_TOKENS,
+        extra_body={"reasoning_effort": "low"},
         messages=[
-            {"role": "system", "content": _SYSTEM},
+            {"role": "system", "content": system},
             {"role": "user", "content": fi},
         ],
     )

@@ -67,7 +67,7 @@ RAP_ARTISTS: list[str] = ["Gettomasa", "JVG", "Ibe", "Etta", "Costi"]
 import os
 
 LMSTUDIO_BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
-LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "qwen3-14b-128k")  # fits 24GB; reasoning off via /no_think (see synth.py)
+LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "gpt-oss-20b")  # runs best on this box; qwen3-14b also works (see synth.py)
 LMSTUDIO_API_KEY = os.getenv("LMSTUDIO_API_KEY", "lm-studio")  # LM Studio ignores the value
 
 
