@@ -10,6 +10,26 @@ Everything runs **locally** (Apple Silicon / MPS).
 
 ---
 
+## The epic (short version)
+
+The whole story in punchy points — the *why* behind the choices, no fluff.
+
+- **Goal:** translate English into how Finns actually *talk*, not textbook Finnish.
+- **Why it's hard:** models train on written text, so EN→FI comes out formal.
+- **From scratch first:** build a tiny GPT end-to-end for the bragging rights.
+- **Then LoRA:** fine-tune a real small model — the realistic path to usable output.
+- **Sources are the trick:** rap lyrics are perfect slang but wrong shape (no English).
+- **OpenSubtitles = the base:** real EN→FI pairs, dialogue register, broad ability.
+- **Rap lyrics = the flavor:** Gettomasa/JVG/Ibe/Etta/Costi — pure Helsinki slang.
+- **Back-translation = the bridge:** a local LLM turns rap lines into English, so we
+  get EN→FI pairs where the Finnish side is a *real* lyric.
+- **Key insight:** only the English input is synthetic; the puhekieli target is genuine.
+- **Eval is custom:** BLEU would punish slang, so we also score "how spoken is it?".
+- **All local:** no data leaves the laptop; LM Studio does the back-translation.
+- **It's a toy:** personal holiday project — for learning and bragging, not production.
+
+---
+
 ## Kirjakieli vs. puhekieli (the whole point)
 
 | English | kirjakieli (what models give you) | puhekieli (what we want) |
