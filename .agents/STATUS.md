@@ -35,9 +35,10 @@ Personal project, public-web fair game. Three sources, all `active` in
 Then build **Phase 2 tokenizer** (`02_tokenizer.ipynb`) over subtitles+rap+synth.
 
 ## Watch-outs / open threads
-- LM Studio is reachable on :1234 but needs a model loaded (tested — got a clean
-  "No models loaded" 400). Pick a model that understands Finnish slang for better
-  back-translation.
+- Back-translation model chosen: **`qwen3-14b-128k`** (only one that fits 24 GB; 9b/20b
+  overflow). It's a reasoning model — `/no_think` in the prompt is required or it
+  returns empty. Default is set in `config.py`; LM Studio server was at
+  `http://172.20.10.7:1234/v1` during testing (set `LMSTUDIO_BASE_URL` to match yours).
 - No single "correct" puhekieli — target style is young Helsinki rap register.
 - Eval: `eval.puhekieli_score` is a heuristic (marker counting), not linguistics.
   Use it alongside BLEU, not instead of it.

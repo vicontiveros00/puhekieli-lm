@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+
+import re
+import time
 from typing import Iterator
 
 from puhekieli_llm.config import (
@@ -33,8 +36,19 @@ _SYSTEM = (
     "You are a translator. You are given a line of colloquial/slang Finnish "
     "(spoken register, often Helsinki rap lyrics). Translate it into natural, "
     "everyday English. Output ONLY the English translation, no quotes, no notes. "
-    "If the line is already English or nonsense, repeat it unchanged."
+    "If the line is already English or nonsense, repeat it unchanged. /no_think"
 )
+
+
+def _strip_output(text: str) -> str:
+    """Tidy model output: drop wrapping quotes and stray reasoning tags."""
+    text = text.strip()
+    # some reasoning models leak an empty <think></think> block
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    # strip a single pair of surrounding quotes the model likes to add
+    if len(text) >= 2 and text[0] in "\"'" and text[-1] == text[0]:
+        text = text[1:-1].strip()
+    return text
 
 
 def _client():
@@ -45,18 +59,23 @@ def _client():
 
 def back_translate_line(fi: str, client=None, model: str | None = None,
                         temperature: float = 0.2) -> str:
-    """FI -> EN for a single line via the local LLM."""
+    """FI -> EN for a single line via the local LLM.
+
+    Note: reasoning models (e.g. Qwen3) must be told not to think, or they burn
+    the token budget on a <think> block and return empty content. `_SYSTEM` ends
+    with /no_think for that reason; we also strip any leaked tags/quotes.
+    """
     client = client or _client()
     resp = client.chat.completions.create(
         model=model or LMSTUDIO_MODEL,
         temperature=temperature,
-        max_tokens=128,
+        max_tokens=256,
         messages=[
             {"role": "system", "content": _SYSTEM},
             {"role": "user", "content": fi},
         ],
     )
-    return (resp.choices[0].message.content or "").strip()
+    return _strip_output(resp.choices[0].message.content or "")
 
 
 def synthesize_pairs(
