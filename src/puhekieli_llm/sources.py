@@ -101,7 +101,6 @@ def fetch_genius_lyrics(
         skip_non_songs=True,
         excluded_terms=["(Remix)", "(Live)"],
         remove_section_headers=False,  # we strip them ourselves in cleaning
-        verbose=True,
         timeout=15,
         retries=3,
     )
