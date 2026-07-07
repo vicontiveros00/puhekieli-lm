@@ -19,8 +19,9 @@ The whole story in punchy points — the *why* behind the choices, no fluff.
 - **From scratch first:** build a tiny GPT end-to-end for the bragging rights.
 - **Then LoRA:** fine-tune a real small model — the realistic path to usable output.
 - **Sources are the trick:** rap lyrics are perfect slang but wrong shape (no English).
-- **OpenSubtitles = the base:** real EN→FI pairs, dialogue register, broad ability.
+- **OpenSubtitles + OPUS-100 = the base:** real EN→FI pairs, dialogue + broad domains.
 - **Rap lyrics = the flavor:** Gettomasa/JVG/Ibe/Etta/Costi — pure Helsinki slang.
+  Genius blocks scraping (Cloudflare), so these are a small *hand-curated* seed.
 - **Back-translation = the bridge:** a local LLM turns rap lines into English, so we
   get EN→FI pairs where the Finnish side is a *real* lyric.
 - **Key insight:** only the English input is synthetic; the puhekieli target is genuine.
