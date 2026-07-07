@@ -1,0 +1,47 @@
+# --- Data: large / regenerable / possibly license-restricted ---
+data/
+!data/.gitkeep
+*.parquet
+*.jsonl
+*.arrow
+*.bin
+
+# --- Models & checkpoints (large, regenerable) ---
+models/
+!models/.gitkeep
+*.pt
+*.pth
+*.safetensors
+*.gguf
+
+# --- Tokenizer artifacts ---
+*.model
+tokenizer.json
+
+# --- Python / uv ---
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.python-version
+
+# --- Notebook output stripping helper marker ---
+# (we strip outputs before commit to keep the repo clean)
+
+# --- Secrets / config that may hold creds ---
+.env
+configs/secrets*.toml
+*.local.toml
+
+# --- OS / editor ---
+.DS_Store
+.vscode/
+.idea/
+
+# --- Screenshots / scratch ---
+*.png
+*.jpg
+*.jpeg
+image.*
+screenshots/
+scratch/

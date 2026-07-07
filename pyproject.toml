@@ -1,0 +1,54 @@
+[project]
+name = "puhekieli-llm"
+version = "0.1.0"
+description = "Training a small LLM to translate English into spoken/colloquial Finnish (puhekieli), not kirjakieli — a personal holiday experiment"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    # core ML — MPS (Apple Metal) accelerated
+    "torch>=2.4",
+    "numpy>=1.26",
+    # tokenizer training (HuggingFace BPE, Rust-backed)
+    "tokenizers>=0.20",
+    # data wrangling
+    "datasets>=3.0",
+    "pandas>=2.2",
+    "pyarrow>=17",
+    # notebooks + viz
+    "jupyterlab>=4.2",
+    "ipywidgets>=8.1",
+    "matplotlib>=3.9",
+    "tqdm>=4.66",
+    # config
+    "pydantic>=2.8",
+    "tomli-w>=1.0",
+]
+
+[project.optional-dependencies]
+scrape = [
+    # collecting spoken/colloquial Finnish text (subtitles, forums, transcripts)
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.3",
+    "trafilatura>=1.12",   # boilerplate-free main-text extraction
+    "markdownify>=0.13",
+]
+finetune = [
+    # Act 2: LoRA fine-tune a real pretrained model on EN->puhekieli pairs
+    "transformers>=4.44",
+    "peft>=0.13",
+    "accelerate>=1.0",
+    "safetensors>=0.4",
+    # translation quality metrics
+    "sacrebleu>=2.4",
+]
+
+[tool.uv]
+# keep the local package editable so edits to src/ are live in notebooks
+package = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/puhekieli_llm"]
