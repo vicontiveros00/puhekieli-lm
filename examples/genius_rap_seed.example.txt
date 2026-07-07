@@ -1,0 +1,26 @@
+# Curated rap-lyrics seed — EXAMPLE / format reference
+#
+# Genius blocks automated lyric scraping (Cloudflare Private Access Tokens), so
+# lyrics can't be fetched programmatically. You paste lines you like by hand.
+#
+# HOW TO USE
+#   1. In 01_collect.ipynb run fetch_genius_metadata() to list song URLs per
+#      artist -> data/raw/genius_rap/<artist>.songs.json
+#   2. Open a URL in your OWN browser, copy the lines you want.
+#   3. Save them as data/raw/genius_rap/<artist>.txt (one lyric line per line).
+#      (data/ is gitignored, so your lyrics never get committed.)
+#   4. Run clean_genius_lyrics() -> data/clean/genius_rap.jsonl
+#
+# FORMAT (parsed by clean_genius_lyrics)
+#   - one lyric line per line
+#   - blank lines ignored
+#   - '#' lines are comments; use them to tag the current song
+#   - lines < 8 chars and duplicates are dropped
+#   - files named readme/example are skipped, so this file is safe to keep
+#
+# Below is a tiny made-up illustration of the shape (NOT real lyrics):
+
+# Artist - Song Title
+mä meen tänään stadiin duunii
+ei tää skene oo mitää leikkii
+me mennään eteenpäin ei kattota taakse

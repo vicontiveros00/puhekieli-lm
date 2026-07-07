@@ -21,6 +21,7 @@ dependencies = [
     # config
     "pydantic>=2.8",
     "tomli-w>=1.0",
+    "python-dotenv>=1.0",   # load secrets/config from a gitignored .env
 ]
 
 [project.optional-dependencies]
@@ -31,7 +32,6 @@ scrape = [
     "lxml>=5.3",
     "trafilatura>=1.12",   # boilerplate-free main-text extraction
     "markdownify>=0.13",
-    "lyricsgenius>=3.0",   # Genius API client for rap lyrics
 ]
 synth = [
     # Act 1.5: synthesize EN->FI pairs via a local LLM (LM Studio, OpenAI-compatible)

@@ -11,6 +11,16 @@ import torch
 
 # --- Project layout -------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[2]
+
+# Load .env (if present) so secrets/config live in a gitignored file, not the
+# shell or notebooks. Real env vars still win over .env values.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(ROOT / ".env", override=False)
+except ImportError:
+    pass  # python-dotenv not installed yet; env vars still work
+
 DATA = ROOT / "data"
 RAW = DATA / "raw"           # untouched collected source data
 CLEAN = DATA / "clean"       # normalized, deduped parallel/text (jsonl)
@@ -45,11 +55,15 @@ TGT_REGISTER = "puhekieli"   # spoken/colloquial Finnish (vs. "kirjakieli")
 SOURCES: dict[str, dict[str, str]] = {
     "opensubtitles_enfi": {
         "register": "mixed", "role": "pairs", "status": "active",
-        "note": "OPUS OpenSubtitles EN-FI — dialogue, leans colloquial; the base pairs",
+        "note": "OpenSubtitles EN-FI (HF, streamed) — dialogue, leans colloquial; base pairs",
+    },
+    "opus_100": {
+        "register": "mixed", "role": "pairs", "status": "active",
+        "note": "OPUS-100 EN-FI (HF, streamed) — broad mixed-domain pairs; general signal",
     },
     "genius_rap": {
         "register": "puhekieli", "role": "flavor", "status": "active",
-        "note": "Finnish rap lyrics via Genius API — pure Helsinki puhekieli/slang, FI-only",
+        "note": "Curated Finnish rap lyrics (seed .txt files); Genius blocks scraping, API used for song lists only",
     },
     "rap_synthetic": {
         "register": "puhekieli", "role": "synth", "status": "active",

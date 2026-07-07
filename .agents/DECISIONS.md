@@ -21,11 +21,12 @@ on this box (MXFP4 quant → memory-light despite "20b"). **Chosen as default.**
 
 ## 2026-07-07 — Data sources: OpenSubtitles + Genius rap + synthetic back-translation
 Personal project, public web is fair game. Three complementary sources:
-- **`opensubtitles_enfi`** (OPUS OpenSubtitles EN-FI) = the base translation signal.
-  Real EN→FI pairs, dialogue register (leans colloquial but translator-normalized).
-- **`genius_rap`** (Gettomasa, JVG, Ibe, Etta, Costi via Genius API) = the target
-  register — young Helsinki puhekieli/slang — but FI-only, so it can't train a
-  translator alone.
+- **`opensubtitles_enfi`** (OpenSubtitles EN-FI, HF-streamed) = the base translation
+  signal. Real EN→FI pairs, dialogue register (leans colloquial but translator-normalized).
+- **`opus_100`** (OPUS-100 EN-FI, HF-streamed) = broad mixed-domain pairs for general
+  translation ability, complementing the subtitle dialogue.
+- **`genius_rap`** (Gettomasa, JVG, Ibe, Etta, Costi) = the target register — young
+  Helsinki puhekieli/slang — but FI-only, so it can't train a translator alone.
 - **`rap_synthetic`** = the bridge. We back-translate each real lyric FI→EN with a
   local LLM (LM Studio), then train on (synthetic EN → real FI). The FI target is
   always authentic, so the model learns to *produce* genuine puhekieli; only the
@@ -35,12 +36,22 @@ Personal project, public web is fair game. Three complementary sources:
 How they combine: subtitles give broad ability; synthetic rap pairs push output
 toward hard Helsinki register; rap lyrics also seed the tokenizer + puhekieli eval.
 
-## 2026-07-07 — Fetch OpenSubtitles straight from OPUS, not HF datasets
-The HuggingFace `open_subtitles` loader is script-based and modern `datasets`
-refuses it ("Dataset scripts are no longer supported"). So we download the OPUS
-moses zip directly (`OPUS-OpenSubtitles/v2018/moses/en-fi.txt.zip`, ~870 MB) into
-`data/raw/` and stream the two aligned members out of the zip without extracting.
-Capped via `max_pairs` for a laptop-friendly demo; raw zip cached for re-cleaning.
+## 2026-07-07 — Genius scraping is blocked; curated seed + HF-streamed pairs
+Genius gates all lyric-page HTML behind Cloudflare **Private Access Tokens** (Apple
+hardware attestation). No automation beats it: `lyricsgenius` (403), `curl_cffi`
+(all impersonation targets 403), and Playwright (headless + headed + stealth) all
+loop on the challenge — the browser console literally requests a "Private Access
+Token challenge". The Genius **JSON API** (`api.genius.com`) still works but returns
+metadata only (no lyric text). lyrics.ovh covers ~1/15 Finnish rap tracks. Decisions:
+- **`genius_rap` is now a curated seed**: `fetch_genius_metadata()` uses the API to
+  list song URLs per artist; you paste favourite lines into
+  `data/raw/genius_rap/<artist>.txt` (gitignored). `clean_genius_lyrics()` parses the
+  seed .txt (one line/line, `#` = song tag). Fewer but authentic + zero arms race;
+  arguably better synthetic pairs than noisy full-song scrapes. Dropped `lyricsgenius`.
+- **OpenSubtitles now streams from HF** (`sentence-transformers/parallel-sentences-opensubtitles`,
+  en-fi) instead of the 870 MB OPUS moses zip — lighter on disk, no script loader.
+- **Added `opus_100`** (`Helsinki-NLP/opus-100`, en-fi) as a second HF-streamed
+  parallel source for broader, mixed-domain translation signal.
 
 ## 2026-07-07 — puhekieli eval is a heuristic, on purpose
 `eval.puhekieli_score` counts spoken markers (mä/sä/ne/me-passive/stadin slangi) vs
