@@ -3,40 +3,43 @@
 > Keep this current. It's the first thing the next agent reads to know where to start.
 
 **Last updated:** 2026-07-07
-**Current phase:** Phase 0 complete → Phase 1 (data collection) — **user picks sources next.**
+**Current phase:** Phase 1 (data collection) **built** → run it, then Phase 2 (tokenizer).
+
+## Sources chosen (2026-07-07)
+Personal project, public-web fair game. Three sources, all `active` in
+`config.py::SOURCES`:
+- **`opensubtitles_enfi`** (`pairs`) — OPUS OpenSubtitles EN-FI, the base translation
+  signal. Downloaded from OPUS moses zip (~870 MB) into `data/raw/`, stream-cleaned.
+- **`genius_rap`** (`flavor`) — Finnish rap lyrics via Genius API. Artists:
+  Gettomasa, JVG, Ibe, Etta, Costi. FI-only, pure Helsinki puhekieli/slang.
+- **`rap_synthetic`** (`synth`) — EN→FI pairs made by back-translating rap lyrics
+  with a local LLM (LM Studio). FI side is the real lyric; only EN is synthetic.
 
 ## Done
-- [x] Phase 0: project scaffold (mirrors the solita-llm template, retargeted to
-      EN→puhekieli Finnish translation)
-  - uv project, Python 3.11, torch on MPS
-  - `src/puhekieli_llm/config.py`: paths, device, task langs, `SOURCES` registry
-  - `notebooks/00_setup.ipynb` (env check + puhekieli vs kirjakieli intro)
-  - `.gitignore` excludes all data/ and models/
-  - dedicated git repo for this folder
-- [x] `.agents/` handoff docs + weak-local-model support (`AGENTS.md`,
-      `.pi/prompts/`, `/skill:repo-tasks`, `pi.dev/README.md`)
+- [x] Phase 0: scaffold (retargeted solita-llm template to EN→puhekieli)
+- [x] Phase 1 code + notebooks (all verified headless with graceful skips):
+  - `src/puhekieli_llm/sources.py` — Genius fetch/clean + OpenSubtitles zip stream
+  - `src/puhekieli_llm/synth.py` — local-LLM back-translation (resumable)
+  - `src/puhekieli_llm/eval.py` — puhekieli-feature scorer (spoken vs kirjakieli)
+  - `notebooks/01_collect.ipynb`, `notebooks/01b_synthesize.ipynb`
+  - deps: `scrape` extra + `lyricsgenius`; new `synth` extra (`openai`)
 
-## Next up — Phase 1 (data collection)
-**Blocked on the user choosing sources.** We need EN→puhekieli signal. Candidate
-source types (user decides, then register in `config.py::SOURCES` as `active`):
-- **Subtitles** (movies/TV) — naturally spoken register. Watch licensing.
-- **Forums / chat** (e.g. Suomi24) — very colloquial. Watch scraping terms + PII.
-- **Parallel corpora** (Tatoeba, OPUS) — lots of EN-FI pairs but mostly kirjakieli;
-  useful as a base to then bias toward puhekieli.
-- **Transcripts** of spoken Finnish (podcasts, interviews).
-
-Open questions for the user:
-1. Which sources are you comfortable using (license/ethics)?
-2. Do you have EN↔FI *parallel* data, or FI-only spoken text (then we synthesize EN)?
-3. Target a specific dialect/style, or general everyday spoken Finnish?
-
-Once sources are chosen: build a **streaming/incremental** collector that writes
-normalized records to `data/clean/*.jsonl`. Suggested schema for parallel data:
-`{"source": "...", "id": "...", "en": "...", "fi": "...", "register": "puhekieli"}`
-Keep raw fetches in `data/raw/` so we can re-clean without re-fetching.
+## Next up
+**Actually run Phase 1** (needs credentials/services the agent can't provide):
+1. `export GENIUS_ACCESS_TOKEN=...` (https://genius.com/api-clients), launch Jupyter,
+   run `01_collect.ipynb` section A → builds `data/clean/genius_rap.jsonl`.
+2. Run section B with `FETCH_OPENSUBS=1` → downloads + builds
+   `data/clean/opensubtitles_enfi.jsonl` (~870 MB one-time).
+3. Load a model in LM Studio (server on :1234), run `01b_synthesize.ipynb` — start
+   with `limit=100`, eyeball, then raise. Builds `data/clean/rap_synthetic.jsonl`.
+Then build **Phase 2 tokenizer** (`02_tokenizer.ipynb`) over subtitles+rap+synth.
 
 ## Watch-outs / open threads
-- No single "correct" puhekieli — decide the target style and note it in DECISIONS.
-- Eval can't just be BLEU vs a kirjakieli reference; add a puhekieli-feature check.
-- Disk is tight (~50GB) — process incrementally; don't hoard the full corpus.
+- LM Studio is reachable on :1234 but needs a model loaded (tested — got a clean
+  "No models loaded" 400). Pick a model that understands Finnish slang for better
+  back-translation.
+- No single "correct" puhekieli — target style is young Helsinki rap register.
+- Eval: `eval.puhekieli_score` is a heuristic (marker counting), not linguistics.
+  Use it alongside BLEU, not instead of it.
+- Disk tight (~50GB): the OpenSubtitles zip is ~870 MB; `data/` is gitignored.
 - Parent `~/repos` is a separate git repo — never `git add` from there.

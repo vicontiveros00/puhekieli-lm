@@ -38,15 +38,37 @@ TGT_REGISTER = "puhekieli"   # spoken/colloquial Finnish (vs. "kirjakieli")
 #   "excluded" -> decided against (log why in DECISIONS.md)
 # `register`: "puhekieli" (spoken), "mixed", or "kirjakieli" (written; usually
 # not what we want, but useful as contrast / for the source side).
+# `role`: how the source is used in the pipeline:
+#   "pairs"    -> real EN->FI parallel training pairs
+#   "flavor"   -> FI-only text; drives tokenizer + puhekieli eval
+#   "synth"    -> synthetic EN->FI pairs derived by back-translation (FI is real)
 SOURCES: dict[str, dict[str, str]] = {
-    # examples — none active until the user says so:
-    # "opensubtitles_fi": {"register": "puhekieli", "status": "planned",
-    #                       "note": "movie/TV subtitles — spoken register, check license"},
-    # "suomi24":          {"register": "puhekieli", "status": "planned",
-    #                       "note": "forum posts — very colloquial"},
-    # "tatoeba":          {"register": "mixed", "status": "planned",
-    #                       "note": "EN-FI sentence pairs, mostly kirjakieli"},
+    "opensubtitles_enfi": {
+        "register": "mixed", "role": "pairs", "status": "active",
+        "note": "OPUS OpenSubtitles EN-FI — dialogue, leans colloquial; the base pairs",
+    },
+    "genius_rap": {
+        "register": "puhekieli", "role": "flavor", "status": "active",
+        "note": "Finnish rap lyrics via Genius API — pure Helsinki puhekieli/slang, FI-only",
+    },
+    "rap_synthetic": {
+        "register": "puhekieli", "role": "synth", "status": "active",
+        "note": "EN->FI pairs synthesized from genius_rap by local-LLM back-translation; FI side is the real lyric",
+    },
 }
+
+# Rap artists to seed the Genius scrape (young Helsinki spoken/slang register).
+RAP_ARTISTS: list[str] = ["Gettomasa", "JVG", "Ibe", "Etta", "Costi"]
+
+
+# --- Local LLM (LM Studio) for back-translation ---------------------------
+# Synthetic-pair generation calls a local OpenAI-compatible endpoint. Nothing
+# leaves the machine. Override via env if your setup differs.
+import os
+
+LMSTUDIO_BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
+LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "local-model")  # whatever is loaded in LM Studio
+LMSTUDIO_API_KEY = os.getenv("LMSTUDIO_API_KEY", "lm-studio")  # LM Studio ignores the value
 
 
 def active_sources() -> list[str]:
