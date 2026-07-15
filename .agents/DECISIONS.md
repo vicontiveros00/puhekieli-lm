@@ -12,7 +12,7 @@ on this box (MXFP4 quant → memory-light despite "20b"). **Chosen as default.**
     (was `finish_reason=length` → empty at 256).
   - `reasoning_effort=low` to keep it brief.
   - qwen-style models additionally get `/no_think` appended (skips reasoning; faster).
-  - `_strip_output` removes leaked `<think>` blocks and smart/plain wrapping quotes.
+  - `_strip_output` removes leaked `think:<...>` blocks and smart/plain wrapping quotes.
 - Quality (hard Helsinki slang) is ~tied: gpt-oss phrasing slightly more natural
   ("heading out for a gig", keeps "Stadi"), qwen a touch more literal. Both miss
   *friidu*=girl. gpt-oss ~11s/line (reasoning budget), qwen ~6s/line.
@@ -88,3 +88,12 @@ changed: company-data LM → EN→puhekieli translator. Data schema shifts from 
 Same reasoning as the template: 3.11 is the ML-lib sweet spot; uv for reproducible
 envs; torch on Apple Metal (MPS), model sizes chosen to fit 24GB unified memory
 (Act 1: ~10–50M params). Device auto-selects MPS→CUDA→CPU.
+
+## 2026-07-07 — Phase 1 executed: cleaned rap lyrics + synthetic back-translation
+After gathering manual rap lyric cuts (Costi, Gettomasa, JVG, Ibe, Etta) into
+`data/clean/genius_rap.jsonl` (6,016 puhekieli lines), ran back-translation via LM
+Studio (`gpt-oss-20b`) to build `rap_synthetic.jsonl`. Test sample (90 pairs) shows:
+- Translation quality: high (FI: authentic puhekieli; EN: natural English back-translation).
+- Puhekieli spoken-leaning rate: ≈59% on sample (acceptable mix of formal drift with
+  authentic rap register) — cleaned rap lyrics + puhekieli model already lean spoken.
+Next: raise `limit` to corpus scale (~6K) and proceed to Phase 2 tokenizer.

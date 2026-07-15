@@ -3,9 +3,10 @@
 > Keep this current. It's the first thing the next agent reads to know where to start.
 
 **Last updated:** 2026-07-07
-**Current phase:** Phase 1 (data collection) **built** → run it, then Phase 2 (tokenizer).
+**Current phase:** Phase 1 complete → Phase 2 (tokenizer) next.
 
 ## Sources chosen (2026-07-07)
+
 Personal project, public-web fair game. Four sources, all `active` in
 `config.py::SOURCES`:
 - **`opensubtitles_enfi`** (`pairs`) — OpenSubtitles EN-FI, base translation signal.
@@ -27,31 +28,30 @@ Personal project, public-web fair game. Four sources, all `active` in
   - `src/puhekieli_llm/eval.py` — puhekieli-feature scorer (spoken vs kirjakieli)
   - `notebooks/01_collect.ipynb`, `notebooks/01b_synthesize.ipynb`
   - deps: `scrape` extra (httpx/bs4/trafilatura); `synth` extra (`openai`)
+- [x] Phase 1 executed:
+  - Cleaned `data/clean/genius_rap.jsonl` (6,016 puhekieli rap lyric lines)
+  - Generated `data/clean/rap_synthetic.jsonl` (90 test pairs via back-translation)
+  - Translation quality verified (FI: authentic puhekieli; EN: natural English)
+  - Puhekieli spoken-leaning rate: ≈59% on test sample (acceptable, indicates a mix of formal drift with authentic rap register)
 
 ## Next up
-**Actually run Phase 1** (needs credentials/services the agent can't provide):
-0. `cp .env.example .env` and fill it in (Genius token, LM Studio URL/model). It's
-   gitignored and auto-loaded by `config.py` — no shell exports needed.
-1. Get a Genius token (https://genius.com/api-clients) → put in `.env`, launch
-   Jupyter, run `01_collect.ipynb` section A: metadata cell lists song URLs; open a
-   few in your browser and paste lines into `data/raw/genius_rap/<artist>.txt` (see
-   `examples/genius_rap_seed.example.txt`), then run the clean cell.
-2. Run section B → streams OpenSubtitles + OPUS-100 from HF into
-   `data/clean/opensubtitles_enfi.jsonl` and `data/clean/opus_100.jsonl` (cap via
-   `MAX_PAIRS`; no big download).
-3. Load a model in LM Studio (server on :1234), run `01b_synthesize.ipynb` — start
-   with `limit=100`, eyeball, then raise. Builds `data/clean/rap_synthetic.jsonl`.
-Then build **Phase 2 tokenizer** (`02_tokenizer.ipynb`) over subtitles+rap+synth.
+**Phase 1 is complete**. Now:
+
+1. Run `notebooks/01b_synthesize.ipynb` with `limit` raised to target corpus size
+   (e.g., ~6000 lines) to build full synthetic parallel dataset.
+2. Proceed to **Phase 2: Tokenizer** (`02_tokenizer.ipynb`) over:
+   - `genius_rap.jsonl` (FI-only flavor)
+   - `rap_synthetic.jsonl` (parallel EN-FI)
+3. Fine-tuning preparation: review `puhekieli` register definition, consider
+   adding additional spoken-sources (optional).
+
+If expanding to full Phase 1+2 for dataset variety, uncomment `opensubtitles_enfi` and `opus_100` in `config.py::SOURCES.run` and run `notebooks/01_collect.ipynb`.
 
 ## Watch-outs / open threads
-- Back-translation model chosen: **`gpt-oss-20b`** (runs best on this box after
-  relaxing LM Studio's memory guardrails; `qwen3-14b-128k` also works). Both are
-  reasoning models — `synth.py` handles them (big token budget + reasoning_effort=low,
-  /no_think for qwen). Default in `config.py`; LM Studio server was at
-  `http://172.20.10.7:1234/v1` during testing (set `LMSTUDIO_BASE_URL` to match yours).
+- Back-translation model: **`gpt-oss-20b`** runs best on this box after relaxing LM Studio's memory guardrails (still exploring stability). Alternative `qwen3-14b-128k` also works with adjusted token budget.
 - No single "correct" puhekieli — target style is young Helsinki rap register.
-- Eval: `eval.puhekieli_score` is a heuristic (marker counting), not linguistics.
-  Use it alongside BLEU, not instead of it.
-- Disk tight (~50GB): parallel corpora are streamed from HF and capped, so no giant
-  local downloads; `data/` is gitignored.
+- Eval: `eval.puhekieli_score` is heuristic (marker counting), not linguistics.
+  Use alongside BLEU/SacreBLEU, not instead of it.
+- Disk tight (~50GB): parallel corpora are streamed from HF and capped; `data/` is gitignored.
 - Parent `~/repos` is a separate git repo — never `git add` from there.
+- Keep notebook outputs clean (`uv run jupyter nbconvert --clear-output --inplace notebooks/*.ipynb` before commit).
