@@ -1,25 +1,20 @@
 """
 Fine-tune a base language model on puhekieli rap + synthetic parallel pairs.
 
-Uses LoRA for efficient fine-tuning on M4 Pro (24GB unified memory).
+Uses HuggingFace tokenizers (no custom vocab required).
 
 Usage:
     uv run python scripts/finetune.py \
         --model meta-llama/Llama-3.2-3B-Instruct \
-        --vocab data/tokenizer/vocab.txt \
-        --train data/tokenized/rap_synthetic_train_tokens.txt \
-        --valid data/tokenized/rap_synthetic_valid_tokens.txt \
-        --out checkpoints/llama3.2-3b-lora-2e4-2ep \
-        --epochs 2 \
-        --batch 4 \
-        --lora r=16
+        --fi-data data/clean/genius_rap.jsonl \
+        --fi-en data/clean/rap_synthetic.jsonl \
+        --out checkpoints/llama3.2-3b-lora-2e-2ep
 """
 
 import argparse
 import json
-import os
 from pathlib import Path
-from typing import List, Dict
+from typing import List
 from tqdm import tqdm
 
 import torch
@@ -28,12 +23,10 @@ from torch.utils.data import Dataset, DataLoader
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
-    AutoModelForCausalLM,
     AutoModelForSeq2SeqLM,
     set_seed,
 )
 
-# Enable MPS on Apple Silicon
 if torch.backends.mps.is_available():
     device = torch.device("mps")
     print(f"Using device: {device}")
@@ -42,40 +35,81 @@ else:
     print(f"Using device: {device}")
 
 
-class PuhekieliDataset(Dataset):
-    """Dataset for sequences from the tokenized text files."""
+class PuhekieliFiDataset(Dataset):
+    """Dataset for FI-only text (genius_rap)."""
 
-    def __init__(self, filepath: Path, tokenizer: AutoTokenizer, separator=" ", max_len=None):
+    def __init__(self, file_path: Path, tokenizer: AutoTokenizer, max_len=None):
         self.tokenizer = tokenizer
         self.data = []
-        with open(filepath) as f:
-            for line in tqdm(f, desc=f"Loading {filepath.name}"):
+        with open(file_path) as f:
+            for line in tqdm(f, desc=f"Loading {file_path.name}"):
                 line = line.strip()
                 if not line:
                     continue
-                tokens = line.split(separator)[:max_len] if max_len else line.split(separator)
-                token_ids = tokenizer.convert_tokens_to_ids(tokens)
-                token_ids.append(tokenizer.eos_token_id)
-                self.data.append(torch.tensor(token_ids, dtype=torch.long))
+                tokens = tokenizer(
+                    line,
+                    truncation=True,
+                    max_length=max_len,
+                    padding="max_length",
+                    return_tensors=None,
+                )
+                tokens = [int(t) for t in tokens["input_ids"]]
+                tokens.append(tokenizer.eos_token_id)
+                if len(tokens) > max_len + 2:
+                    tokens = tokens[:max_len + 2]
+                self.data.append(torch.tensor(tokens, dtype=torch.long))
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.data)
 
-    def __getitem__(self, idx: int) -> torch.Tensor:
+    def __getitem__(self, idx):
         return self.data[idx]
 
 
-class PuhekieliForCaptioning:
-    """Seq2Seq trainer for NEU-PIEH (EN → FI) or causal LM (FI-only) fine-tuning."""
+class PuhekieliTrainSet(Dataset):
+    """Dataset for parallel FI-FI training pairs (synthetic back-translation)."""
+
+    def __init__(self, file_path: Path, tokenizer: AutoTokenizer, max_len=None):
+        self.tokenizer = tokenizer
+        self.data = []
+        with open(file_path) as f:
+            for line in tqdm(f, desc=f"Loading {file_path.name}", total=sum(1 for _ in f)):
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                # Should have {fi: "..."} in synthetic
+                fi_text = obj.get("fi", obj.get("text", ""))
+                tokens = tokenizer(
+                    fi_text,
+                    truncation=True,
+                    max_length=max_len,
+                    return_tensors=None,
+                )
+                tokens = [int(t) for t in tokens["input_ids"]]
+                tokens.append(tokenizer.eos_token_id)
+                if len(tokens) > max_len + 2:
+                    tokens = tokens[:max_len + 2]
+                self.data.append(torch.tensor(tokens, dtype=torch.long))
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx]
+
+
+class PuhekieliFineTuner:
+    """Fine-tune puhekieli model (FI-only estimate FI + EN→FI)."""
 
     def __init__(
         self,
         model_name: str,
-        vocab_path: Path,
+        gensfi_path: Path,
         train_path: Path,
         valid_path: Path,
         out_path: Path,
-        max_epochs: int = 3,
+        max_epochs: int = 2,
         batch_size: int = 4,
         lr: float = 2e-4,
         lora_r: int = 16,
@@ -83,44 +117,44 @@ class PuhekieliForCaptioning:
         lora_dropout: float = 0.05,
         warmup_steps: int = 250,
         eval_steps: int = 500,
+        max_len: int = 512,
         seed: int = 42,
     ):
-        self.model_name = model_name
         self.out_path = Path(out_path)
         self.out_path.mkdir(parents=True, exist_ok=True)
 
         # Load tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(str(vocab_path))
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.max_len = max_len
 
-        # Load training data
-        self.train_dataset = PuhekieliDataset(train_path, self.tokenizer)
-        self.valid_dataset = PuhekieliDataset(valid_path, self.tokenizer)
+        # Load datasets
+        self.train_dataset = PuhekieliTrainSet(train_path, self.tokenizer, max_len=max_len)
+        self.valid_dataset = PuhekieliTrainSet(valid_path, self.tokenizer, max_len=max_len)
+        print(f"Loaded {len(self.train_dataset)} train / {len(self.valid_dataset)} valid samples")
 
-        # Data load
-        train_loader = DataLoader(
+        # Data loaders
+        self.train_loader = DataLoader(
             self.train_dataset,
             batch_size=batch_size,
             shuffle=True,
             num_workers=0,
-            pin_memory=True,
         )
-        valid_loader = DataLoader(
+        self.valid_loader = DataLoader(
             self.valid_dataset,
             batch_size=batch_size,
             shuffle=False,
             num_workers=0,
-            pin_memory=True,
         )
 
-        # Setup model
+        # Model
         self.model = AutoModelForSeq2SeqLM.from_pretrained(
             model_name,
             torch_dtype=torch.float16,
         )
         self.model.to(device)
 
-        # LoRA configuration
+        # LoRA
         try:
             from peft import LoraConfig, get_peft_model
 
@@ -128,24 +162,21 @@ class PuhekieliForCaptioning:
                 r=lora_r,
                 lora_alpha=lora_alpha,
                 lora_dropout=lora_dropout,
-                target_modules=["q_proj", "v_proj"],  # enough for basic fine-tuning
+                target_modules=["q_proj", "v_proj"],
                 bias="none",
             )
             self.model = get_peft_model(self.model, lora_config)
             self.model.print_trainable_parameters()
         except Exception as e:
-            print(f"PEFT/LoRA not available, training fully fine-tuned: {e}")
-            # Fallback: just leave the model as is
+            print(f"LoRA not available, training fully fine-tuned: {e}")
 
-        # Optimizer
+        # Training
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=max_epochs)
         self.warmup_steps = warmup_steps
         self.global_step = 0
         self.eval_steps = eval_steps
         self.seed = seed
-
-        # Training state
         self.best_valid_loss = float("inf")
 
     def train_epoch(self, loader: DataLoader, epoch: int) -> float:
@@ -153,8 +184,6 @@ class PuhekieliForCaptioning:
         total_loss = 0.0
         for batch in loader:
             batch = {k: v.to(device) for k, v in batch.items()}
-            self.model.zero_grad()
-            # Helper function using a simple cross-entropy objective
             outputs = self.model(**batch, use_cache=False)
             loss = outputs.loss
             loss.backward()
@@ -184,77 +213,60 @@ class PuhekieliForCaptioning:
         print(f"Validation loss: {avg_loss:.4f}")
         return avg_loss
 
-    def save_best(self, valid_loss: float, epoch: int):
-        """Save checkpoint if this is the best seen so far."""
+    def save_checkpoint(self, valid_loss: float, epoch: int):
         if valid_loss < self.best_valid_loss:
             self.best_valid_loss = valid_loss
             save_path = self.out_path / "best.pt"
             self.model.save_pretrained(save_path)
-            tokenizer_path = self.out_path / "tokenizer"
-            tokenizer_path.mkdir(exist_ok=True)
-            self.tokenizer.save_pretrained(tokenizer_path)
-            print(f"Saved new best model with valid loss={valid_loss:.4f}")
+            self.tokenizer.save_pretrained(save_path / "tokenizer")
+            print(f"Saved new best: valid_loss={valid_loss:.4f}")
 
-    def fit(self, max_epochs: int = 3):
+    def fit(self, max_epochs: int = 2):
         for epoch in range(max_epochs):
-            if self.global_step < self.warmup_steps:
-                progress = self.global_step / self.warmup_steps
-                for param_group in self.optimizer.param_groups:
-                    param_group["lr"] = param_group["orig_lr"] * progress
-
             train_loss = self.train_epoch(self.train_loader, epoch)
             valid_loss = self.validate(self.valid_loader)
-            self.save_best(valid_loss, epoch)
+            self.save_checkpoint(valid_loss, epoch)
             self.scheduler.step()
 
         # Final save
         final_path = self.out_path / "final.pt"
         self.model.save_pretrained(final_path)
-        print(f"Saved final model to {final_path}")
+        self.tokenizer.save_pretrained(final_path / "tokenizer")
+        print(f"Saved final to {final_path}")
         return self.best_valid_loss
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fine-tune a base model on puhekieli")
-    parser.add_argument("--model", type=str, default="meta-llama/Llama-3.2-3B-Instruct",
-                        help="HuggingFace model path or name")
-    parser.add_argument("--vocab", type=Path, required=True,
-                        help="Path to vocab.txt")
-    parser.add_argument("--train", type=Path, required=True,
-                        help="Path to tokenized train file")
-    parser.add_argument("--valid", type=Path, required=True,
-                        help="Path to tokenized valid file")
-    parser.add_argument("--out", type=Path, required=True,
-                        help="Output directory for checkpoints")
-    parser.add_argument("--epochs", type=int, default=2,
-                        help="Number of training epochs")
-    parser.add_argument("--batch", type=int, default=4,
-                        help="Batch size")
-    parser.add_argument("--lr", type=float, default=2e-4,
-                        help="Learning rate")
-    parser.add_argument("--lora-r", type=int, default=16,
-                        help="LoRA rank")
+    parser = argparse.ArgumentParser(description="Fine-tune puhekieli model")
+    parser.add_argument("--model", type=str, default="meta-llama/Llama-3.2-3B-Instruct")
+    parser.add_argument("--fi-data", type=Path, required=True)
+    parser.add_argument("--fi-en", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--epochs", type=int, default=2)
+    parser.add_argument("--batch", type=int, default=4)
+    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--lora-r", type=int, default=16)
+    parser.add_argument("--max-len", type=int, default=512)
     parser.add_argument("--seed", type=int, default=42)
+
     args = parser.parse_args()
-
     set_seed(args.seed)
-    for param_group in args.model.parameters():
-        param_group["orig_lr"] = args.lr
 
-    trainer = PuhekieliForCaptioning(
+    trainer = PuhekieliFineTuner(
         model_name=args.model,
-        vocab_path=args.vocab,
-        train_path=args.train,
-        valid_path=args.valid,
+        gensfi_path=args.fi_data,
+        train_path=args.fi_en,
+        valid_path=args.fi_en,
         out_path=args.out,
         max_epochs=args.epochs,
         batch_size=args.batch,
         lr=args.lr,
         lora_r=args.lora_r,
+        max_len=args.max_len,
         seed=args.seed,
     )
 
-    trainer.fit(max_epochs=args.epochs)
+    trainer.fit()
 
 
 if __name__ == "__main__":
