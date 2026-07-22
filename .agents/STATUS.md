@@ -2,10 +2,20 @@
 
 > Keep this current. It's the first thing the next agent reads to know where to start.
 
-**Last updated:** 2026-07-07
-**Current phase:** Phase 1 complete → Phase 2 (tokenizer) next.
+**Last updated:** 2026-07-22
+**Current phase:** Phase 5 (LoRA fine-tune) in progress — pipeline built, no completed run yet.
 
-## Sources chosen (2026-07-07)
+## TL;DR for the next agent
+Data is collected & scaled. The custom-tokenizer path (Phase 2) was tried then
+dropped in favour of the base model's HF `AutoTokenizer`. The LoRA fine-tune
+pipeline (`scripts/finetune.py`) is built and pointed at **Qwen/Qwen3-4B** via
+`scripts/run_finetune.sh`, but **no fine-tune has completed** — all three
+`checkpoints/*` dirs are empty. `scripts/finetune.py` has substantial uncommitted
+changes (causal-LM rewrite) and `scripts/run_finetune.sh` is untracked.
+**Next concrete action:** run `scripts/run_finetune.sh`, confirm it produces
+weights, then commit.
+
+## Sources chosen (2026-07-07, still current)
 
 Personal project, public-web fair game. Four sources, all `active` in
 `config.py::SOURCES`:
@@ -28,24 +38,42 @@ Personal project, public-web fair game. Four sources, all `active` in
   - `src/puhekieli_llm/eval.py` — puhekieli-feature scorer (spoken vs kirjakieli)
   - `notebooks/01_collect.ipynb`, `notebooks/01b_synthesize.ipynb`
   - deps: `scrape` extra (httpx/bs4/trafilatura); `synth` extra (`openai`)
-- [x] Phase 1 executed:
-  - Cleaned `data/clean/genius_rap.jsonl` (6,016 puhekieli rap lyric lines)
-  - Generated `data/clean/rap_synthetic.jsonl` (90 test pairs via back-translation)
-  - Translation quality verified (FI: authentic puhekieli; EN: natural English)
-  - Puhekieli spoken-leaning rate: ≈59% on test sample (acceptable, indicates a mix of formal drift with authentic rap register)
+- [x] Phase 1 executed **and scaled to full corpus**. `data/clean/` now holds:
+  - `genius_rap.jsonl` — 6,016 authentic puhekieli rap lines (FI-only flavor)
+  - `rap_synthetic.jsonl` — 5,480 EN→FI pairs (real lyric FI + back-translated EN)
+  - `opensubtitles_enfi.jsonl` — 50,000 pairs (HF-streamed base signal)
+  - `opus_100.jsonl` — 50,000 pairs (HF-streamed broad mixed-domain)
+  - Back-translation quality verified (FI authentic puhekieli; EN natural English);
+    ≈59% spoken-leaning on sample.
+- [x] Phase 2 (tokenizer): tried a custom BPE tokenizer
+  (`notebooks/02_tokenizer.ipynb`, token files under `data/tokenized/`), then
+  **dropped it** — `finetune.py` and `chat.py` now use the base model's HF
+  `AutoTokenizer` (commit 41872bc). Custom vocab no longer on the critical path.
+- [x] Phase 5 pipeline built: `scripts/finetune.py` (HF `AutoModelForCausalLM` +
+  PEFT LoRA on `q_proj`/`v_proj`, bf16 on MPS), `scripts/chat.py` (inference),
+  `scripts/run_finetune.sh` (wrapper → Qwen/Qwen3-4B, 2 epochs, batch 2, max-len 512).
+  `finetune` extra added (`transformers`, `peft`); confirmed importable on M4 Pro.
 
 ## Next up
-**Phase 1 is complete**. Now:
+**Phase 5 fine-tune has NOT completed yet.** Concrete steps:
 
-1. Run `notebooks/01b_synthesize.ipynb` with `limit` raised to target corpus size
-   (e.g., ~6000 lines) to build full synthetic parallel dataset.
-2. Proceed to **Phase 2: Tokenizer** (`02_tokenizer.ipynb`) over:
-   - `genius_rap.jsonl` (FI-only flavor)
-   - `rap_synthetic.jsonl` (parallel EN-FI)
-3. Fine-tuning preparation: review `puhekieli` register definition, consider
-   adding additional spoken-sources (optional).
+1. Commit the pending work first (review the diff): `scripts/finetune.py` was
+   reworked from seq2seq → causal-LM (chat-template formatting, `Translate to
+   Finnish:` prompts, `DataCollatorForLanguageModeling`), and
+   `scripts/run_finetune.sh` is untracked.
+2. Run `scripts/run_finetune.sh` and confirm it actually writes weights — the three
+   `checkpoints/*` dirs (`qwen2.5-1.5b-lora-2e-2ep`, `llama3.2-3b-lora-2e-2ep`,
+   `qwen3-4b-lora-2e-2ep`) are all **empty** (runs were set up but produced nothing).
+3. Once a checkpoint exists, evaluate with `scripts/chat.py` + `eval.puhekieli_score`
+   (spoken-lean) alongside BLEU. Compare base vs LoRA output register.
+4. Phase 3/4 (train-from-scratch tiny GPT + generate/eval notebooks) remain TODO —
+   Act 1 was effectively skipped in favour of going straight to Act 2 LoRA. Decide
+   whether to backfill Act 1 or keep focus on the fine-tune.
 
-If expanding to full Phase 1+2 for dataset variety, uncomment `opensubtitles_enfi` and `opus_100` in `config.py::SOURCES.run` and run `notebooks/01_collect.ipynb`.
+## Uncommitted / in-flight (as of 2026-07-22)
+- `scripts/finetune.py` — modified (+92/−42), seq2seq→causal-LM rewrite, not committed
+- `scripts/run_finetune.sh` — new, untracked
+- `checkpoints/{qwen2.5-1.5b,llama3.2-3b,qwen3-4b}-lora-2e-2ep/` — empty dirs (no weights)
 
 ## Watch-outs / open threads
 - Back-translation model: **`gpt-oss-20b`** runs best on this box after relaxing LM Studio's memory guardrails (still exploring stability). Alternative `qwen3-14b-128k` also works with adjusted token budget.
