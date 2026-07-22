@@ -23,8 +23,9 @@ from torch.utils.data import Dataset, DataLoader
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
-    AutoModelForSeq2SeqLM,
+    AutoModelForCausalLM, # Changed from AutoModelForSeq2SeqLM
     set_seed,
+    DataCollatorForLanguageModeling, # Added this
 )
 
 if torch.backends.mps.is_available():
@@ -41,23 +42,36 @@ class PuhekieliFiDataset(Dataset):
     def __init__(self, file_path: Path, tokenizer: AutoTokenizer, max_len=None):
         self.tokenizer = tokenizer
         self.data = []
-        with open(file_path) as f:
-            for line in tqdm(f, desc=f"Loading {file_path.name}"):
-                line = line.strip()
-                if not line:
-                    continue
-                tokens = tokenizer(
-                    line,
-                    truncation=True,
-                    max_length=max_len,
-                    padding="max_length",
-                    return_tensors=None,
-                )
-                tokens = [int(t) for t in tokens["input_ids"]]
-                tokens.append(tokenizer.eos_token_id)
-                if len(tokens) > max_len + 2:
-                    tokens = tokens[:max_len + 2]
-                self.data.append(torch.tensor(tokens, dtype=torch.long))
+        with open(file_path, 'r') as f:
+            raw_lines = f.readlines() # Read all lines once
+
+        for line in tqdm(raw_lines, desc=f"Loading {file_path.name}"):
+            line = line.strip()
+            if not line:
+                continue
+
+            # For FI-only data, the input can be a generic prompt to generate Finnish
+            # The labels will be the tokenized Finnish text following the prompt.
+            messages = [
+                {"role": "user", "content": "Generate Finnish text:"},
+                {"role": "assistant", "content": line},
+            ]
+
+            tokenized_output = tokenizer.apply_chat_template(
+                messages,
+                truncation=True,
+                max_length=max_len,
+                return_tensors="pt",
+                padding="max_length", # Ensure all sequences are padded to max_len
+                add_generation_prompt=False,
+            )
+            
+            # Extract 1D tensors from BatchEncoding
+            self.data.append({
+                "input_ids": tokenized_output["input_ids"].squeeze(0),
+                "attention_mask": tokenized_output["attention_mask"].squeeze(0),
+                "labels": tokenized_output["input_ids"].squeeze(0),
+            })
 
     def __len__(self):
         return len(self.data)
@@ -67,30 +81,44 @@ class PuhekieliFiDataset(Dataset):
 
 
 class PuhekieliTrainSet(Dataset):
-    """Dataset for parallel FI-FI training pairs (synthetic back-translation)."""
+    """Dataset for parallel EN->FI training pairs (synthetic back-translation)."""
 
     def __init__(self, file_path: Path, tokenizer: AutoTokenizer, max_len=None):
         self.tokenizer = tokenizer
         self.data = []
-        with open(file_path) as f:
-            for line in tqdm(f, desc=f"Loading {file_path.name}", total=sum(1 for _ in f)):
-                line = line.strip()
-                if not line:
-                    continue
-                obj = json.loads(line)
-                # Should have {fi: "..."} in synthetic
-                fi_text = obj.get("fi", obj.get("text", ""))
-                tokens = tokenizer(
-                    fi_text,
-                    truncation=True,
-                    max_length=max_len,
-                    return_tensors=None,
-                )
-                tokens = [int(t) for t in tokens["input_ids"]]
-                tokens.append(tokenizer.eos_token_id)
-                if len(tokens) > max_len + 2:
-                    tokens = tokens[:max_len + 2]
-                self.data.append(torch.tensor(tokens, dtype=torch.long))
+        with open(file_path, 'r') as f:
+            raw_lines = f.readlines() # Read all lines once
+
+        for line in tqdm(raw_lines, desc=f"Loading {file_path.name}"):
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+
+            en_text = obj.get("en", "")
+            fi_text = obj.get("fi", "")
+
+            messages = [
+                {"role": "user", "content": f"Translate to Finnish: {en_text}"},
+                {"role": "assistant", "content": fi_text},
+            ]
+            
+            tokenized_output = tokenizer.apply_chat_template(
+                messages,
+                truncation=True,
+                max_length=max_len,
+                return_tensors="pt",
+                padding="max_length", # Ensure all sequences are padded to max_len
+                add_generation_prompt=False, # No generation prompt here, as the assistant message is the target
+            )
+
+            # For Causal LMs, labels are typically a copy of input_ids, with padding handled by collator
+            # Extract 1D tensors from BatchEncoding
+            self.data.append({
+                "input_ids": tokenized_output["input_ids"].squeeze(0),
+                "attention_mask": tokenized_output["attention_mask"].squeeze(0),
+                "labels": tokenized_output["input_ids"].squeeze(0),
+            })
 
     def __len__(self):
         return len(self.data)
@@ -128,9 +156,29 @@ class PuhekieliFineTuner:
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.max_len = max_len
 
+        # Data collator
+        self.data_collator = DataCollatorForLanguageModeling(
+            tokenizer=self.tokenizer, mlm=False
+        )
+
         # Load datasets
-        self.train_dataset = PuhekieliTrainSet(train_path, self.tokenizer, max_len=max_len)
-        self.valid_dataset = PuhekieliTrainSet(valid_path, self.tokenizer, max_len=max_len)
+        # Split rap_synthetic.jsonl into train/valid
+        full_synthetic_dataset = PuhekieliTrainSet(train_path, self.tokenizer, max_len=max_len)
+        train_size = int(0.9 * len(full_synthetic_dataset))
+        valid_size = len(full_synthetic_dataset) - train_size
+        synthetic_train_dataset, synthetic_valid_dataset = torch.utils.data.random_split(
+            full_synthetic_dataset, [train_size, valid_size]
+        )
+
+        # Load FI-only data (genius_rap.jsonl)
+        fi_only_dataset = PuhekieliFiDataset(gensfi_path, self.tokenizer, max_len=max_len)
+
+        # Combine FI-only with synthetic training data
+        self.train_dataset = torch.utils.data.ConcatDataset(
+            [fi_only_dataset, synthetic_train_dataset]
+        )
+        self.valid_dataset = synthetic_valid_dataset # Validation only from parallel data
+
         print(f"Loaded {len(self.train_dataset)} train / {len(self.valid_dataset)} valid samples")
 
         # Data loaders
@@ -139,18 +187,20 @@ class PuhekieliFineTuner:
             batch_size=batch_size,
             shuffle=True,
             num_workers=0,
+            collate_fn=self.data_collator,
         )
         self.valid_loader = DataLoader(
             self.valid_dataset,
             batch_size=batch_size,
             shuffle=False,
             num_workers=0,
+            collate_fn=self.data_collator,
         )
 
         # Model
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(
+        self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=torch.float16,
+            torch_dtype=torch.bfloat16, # Qwen3-4B is in BF16
         )
         self.model.to(device)
 
