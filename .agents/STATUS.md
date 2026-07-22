@@ -8,12 +8,12 @@
 ## TL;DR for the next agent
 Data is collected & scaled. The custom-tokenizer path (Phase 2) was tried then
 dropped in favour of the base model's HF `AutoTokenizer`. The LoRA fine-tune
-pipeline (`scripts/finetune.py`) is built and pointed at **Qwen/Qwen3-4B** via
-`scripts/run_finetune.sh`, but **no fine-tune has completed** — all three
-`checkpoints/*` dirs are empty. `scripts/finetune.py` has substantial uncommitted
-changes (causal-LM rewrite) and `scripts/run_finetune.sh` is untracked.
-**Next concrete action:** run `scripts/run_finetune.sh`, confirm it produces
-weights, then commit.
+pipeline (`scripts/finetune.py`) is built and pointed at **Qwen/Qwen3-4B** (see
+the fine-tune command in `README.md`), but **no fine-tune has completed** — all
+three `checkpoints/*` dirs are empty. `scripts/finetune.py` has substantial
+uncommitted changes (causal-LM rewrite).
+**Next concrete action:** run the Phase 5 fine-tune command (README), confirm it
+produces weights, then commit.
 
 ## Sources chosen (2026-07-07, still current)
 
@@ -50,20 +50,21 @@ Personal project, public-web fair game. Four sources, all `active` in
   **dropped it** — `finetune.py` and `chat.py` now use the base model's HF
   `AutoTokenizer` (commit 41872bc). Custom vocab no longer on the critical path.
 - [x] Phase 5 pipeline built: `scripts/finetune.py` (HF `AutoModelForCausalLM` +
-  PEFT LoRA on `q_proj`/`v_proj`, bf16 on MPS), `scripts/chat.py` (inference),
-  `scripts/run_finetune.sh` (wrapper → Qwen/Qwen3-4B, 2 epochs, batch 2, max-len 512).
-  `finetune` extra added (`transformers`, `peft`); confirmed importable on M4 Pro.
+  PEFT LoRA on `q_proj`/`v_proj`, bf16 on MPS), `scripts/chat.py` (inference).
+  Fine-tune command documented in `README.md` (Qwen/Qwen3-4B, 2 epochs, batch 2,
+  max-len 512). `finetune` extra added (`transformers`, `peft`); confirmed
+  importable on M4 Pro.
 
 ## Next up
 **Phase 5 fine-tune has NOT completed yet.** Concrete steps:
 
 1. Commit the pending work first (review the diff): `scripts/finetune.py` was
    reworked from seq2seq → causal-LM (chat-template formatting, `Translate to
-   Finnish:` prompts, `DataCollatorForLanguageModeling`), and
-   `scripts/run_finetune.sh` is untracked.
-2. Run `scripts/run_finetune.sh` and confirm it actually writes weights — the three
-   `checkpoints/*` dirs (`qwen2.5-1.5b-lora-2e-2ep`, `llama3.2-3b-lora-2e-2ep`,
-   `qwen3-4b-lora-2e-2ep`) are all **empty** (runs were set up but produced nothing).
+   Finnish:` prompts, `DataCollatorForLanguageModeling`).
+2. Run the Phase 5 fine-tune command (see `README.md`) and confirm it actually
+   writes weights — the three `checkpoints/*` dirs (`qwen2.5-1.5b-lora-2e-2ep`,
+   `llama3.2-3b-lora-2e-2ep`, `qwen3-4b-lora-2e-2ep`) are all **empty** (runs were
+   set up but produced nothing).
 3. Once a checkpoint exists, evaluate with `scripts/chat.py` + `eval.puhekieli_score`
    (spoken-lean) alongside BLEU. Compare base vs LoRA output register.
 4. Phase 3/4 (train-from-scratch tiny GPT + generate/eval notebooks) remain TODO —
@@ -71,8 +72,6 @@ Personal project, public-web fair game. Four sources, all `active` in
    whether to backfill Act 1 or keep focus on the fine-tune.
 
 ## Uncommitted / in-flight (as of 2026-07-22)
-- `scripts/finetune.py` — modified (+92/−42), seq2seq→causal-LM rewrite, not committed
-- `scripts/run_finetune.sh` — new, untracked
 - `checkpoints/{qwen2.5-1.5b,llama3.2-3b,qwen3-4b}-lora-2e-2ep/` — empty dirs (no weights)
 
 ## Watch-outs / open threads

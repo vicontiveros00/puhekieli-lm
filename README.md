@@ -95,6 +95,25 @@ uv run jupyter lab           # open notebooks/
 
 Python pinned to **3.11**. Device auto-selects MPS → CUDA → CPU.
 
+## Fine-tuning (Phase 5)
+
+LoRA fine-tune a base model on the puhekieli rap corpus + synthetic EN→FI pairs.
+Requires `uv sync --extra finetune`.
+
+```bash
+uv run python scripts/finetune.py \
+  --model Qwen/Qwen3-4B \
+  --fi-data data/clean/genius_rap.jsonl \    # FI-only flavor lines
+  --fi-en  data/clean/rap_synthetic.jsonl \  # parallel EN→FI pairs
+  --out    checkpoints/qwen3-4b-lora-2e-2ep \
+  --epochs 2 --batch 2 --max-len 512
+```
+
+Swap `--model` for other bases (`Qwen/Qwen2.5-1.5B-Instruct`,
+`meta-llama/Llama-3.2-3B-Instruct`, …) and rename `--out` to match. Other flags:
+`--lr` (default 2e-4), `--lora-r` (default 16), `--seed` (default 42). Weights land
+in `checkpoints/<name>/` (git-ignored). Chat with a checkpoint via `scripts/chat.py`.
+
 ## Project layout
 
 ```
