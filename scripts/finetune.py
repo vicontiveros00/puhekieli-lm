@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import json
+import time
 from pathlib import Path
 from typing import List
 from tqdm import tqdm
@@ -26,6 +27,7 @@ from transformers import (
     AutoModelForCausalLM, # Changed from AutoModelForSeq2SeqLM
     set_seed,
     DataCollatorForLanguageModeling, # Added this
+    get_cosine_schedule_with_warmup,
 )
 
 if torch.backends.mps.is_available():
@@ -42,6 +44,7 @@ class PuhekieliFiDataset(Dataset):
     def __init__(self, file_path: Path, tokenizer: AutoTokenizer, max_len=None):
         self.tokenizer = tokenizer
         self.data = []
+        self.example_text = None  # first formatted prompt, for a sanity peek
         with open(file_path, 'r') as f:
             raw_lines = f.readlines() # Read all lines once
 
@@ -56,6 +59,11 @@ class PuhekieliFiDataset(Dataset):
                 {"role": "user", "content": "Generate Finnish text:"},
                 {"role": "assistant", "content": line},
             ]
+
+            if self.example_text is None:
+                self.example_text = tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=False
+                )
 
             tokenized_output = tokenizer.apply_chat_template(
                 messages,
@@ -86,6 +94,7 @@ class PuhekieliTrainSet(Dataset):
     def __init__(self, file_path: Path, tokenizer: AutoTokenizer, max_len=None):
         self.tokenizer = tokenizer
         self.data = []
+        self.example_text = None  # first formatted prompt, for a sanity peek
         with open(file_path, 'r') as f:
             raw_lines = f.readlines() # Read all lines once
 
@@ -102,6 +111,11 @@ class PuhekieliTrainSet(Dataset):
                 {"role": "user", "content": f"Translate to Finnish: {en_text}"},
                 {"role": "assistant", "content": fi_text},
             ]
+
+            if self.example_text is None:
+                self.example_text = tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=False
+                )
             
             tokenized_output = tokenizer.apply_chat_template(
                 messages,
@@ -147,11 +161,34 @@ class PuhekieliFineTuner:
         eval_steps: int = 500,
         max_len: int = 512,
         seed: int = 42,
+        log_every: int = 20,
+        dry_run: bool = False,
     ):
         self.out_path = Path(out_path)
         self.out_path.mkdir(parents=True, exist_ok=True)
+        self.log_every = log_every
+        self.dry_run = dry_run
+        self.max_epochs = max_epochs
+        self.global_step = 0
+        self.best_valid_loss = float("inf")
+
+        print("=" * 64)
+        print("puhekieli fine-tune")
+        print("=" * 64)
+        print(f"  model        : {model_name}")
+        print(f"  device       : {device}  (dtype: bfloat16)")
+        print(f"  fi-only data : {gensfi_path}")
+        print(f"  parallel data: {train_path}")
+        print(f"  out dir      : {self.out_path}")
+        print(f"  epochs       : {max_epochs}   batch: {batch_size}   max-len: {max_len}")
+        print(f"  lr           : {lr}   warmup-steps: {warmup_steps}")
+        print(f"  lora         : r={lora_r} alpha={lora_alpha} dropout={lora_dropout}")
+        print(f"  seed         : {seed}   log-every: {log_every} steps"
+              + ("   [DRY RUN]" if dry_run else ""))
+        print("=" * 64)
 
         # Load tokenizer
+        print("\n[1/4] Loading tokenizer ...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.max_len = max_len
@@ -162,6 +199,7 @@ class PuhekieliFineTuner:
         )
 
         # Load datasets
+        print("\n[2/4] Loading datasets ...")
         # Split rap_synthetic.jsonl into train/valid
         full_synthetic_dataset = PuhekieliTrainSet(train_path, self.tokenizer, max_len=max_len)
         train_size = int(0.9 * len(full_synthetic_dataset))
@@ -179,7 +217,24 @@ class PuhekieliFineTuner:
         )
         self.valid_dataset = synthetic_valid_dataset # Validation only from parallel data
 
-        print(f"Loaded {len(self.train_dataset)} train / {len(self.valid_dataset)} valid samples")
+        # Data-composition summary
+        n_fi = len(fi_only_dataset)
+        n_syn_train = len(synthetic_train_dataset)
+        n_valid = len(self.valid_dataset)
+        print("\n  data composition:")
+        print(f"    FI-only (flavor)    : {n_fi:>6}")
+        print(f"    synthetic EN->FI    : {n_syn_train:>6}  (train)  {n_valid:>6}  (valid)")
+        print(f"    ----------------------------------------")
+        print(f"    total train         : {len(self.train_dataset):>6}")
+        print(f"    total valid         : {n_valid:>6}  (parallel only)")
+
+        # One decoded example so the chat-template formatting is visible
+        example = getattr(full_synthetic_dataset, "example_text", None) \
+            or getattr(fi_only_dataset, "example_text", None)
+        if example:
+            print("\n  example formatted prompt (parallel):")
+            for ln in example.rstrip().splitlines():
+                print(f"    | {ln}")
 
         # Data loaders
         self.train_loader = DataLoader(
@@ -196,8 +251,18 @@ class PuhekieliFineTuner:
             num_workers=0,
             collate_fn=self.data_collator,
         )
+        self.steps_per_epoch = len(self.train_loader)
+        self.total_steps = self.steps_per_epoch * max_epochs
+
+        if self.dry_run:
+            print("\n[dry-run] datasets + config verified; skipping model load and training.")
+            print(f"[dry-run] would run {self.total_steps} optimizer steps "
+                  f"({self.steps_per_epoch}/epoch x {max_epochs} epochs).")
+            self.model = None
+            return
 
         # Model
+        print("\n[3/4] Loading model (this can take a moment) ...")
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16, # Qwen3-4B is in BF16
@@ -217,43 +282,75 @@ class PuhekieliFineTuner:
             )
             self.model = get_peft_model(self.model, lora_config)
             self.model.print_trainable_parameters()
-        except Exception as e:
-            print(f"LoRA not available, training fully fine-tuned: {e}")
+        except ImportError:
+            print("\n" + "!" * 64)
+            print("!! WARNING: peft not installed -> falling back to FULL fine-tuning.")
+            print("!! A multi-billion-param model in full FT will very likely OOM on MPS.")
+            print("!! Install with:  uv sync --extra finetune")
+            print("!" * 64 + "\n")
 
         # Training
+        print("\n[4/4] Setting up optimizer + scheduler ...")
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=max_epochs)
+        # Proper per-step cosine schedule WITH warmup (was previously a per-epoch
+        # no-op: warmup_steps was stored but never applied).
+        self.scheduler = get_cosine_schedule_with_warmup(
+            self.optimizer,
+            num_warmup_steps=min(warmup_steps, max(1, self.total_steps // 10)),
+            num_training_steps=self.total_steps,
+        )
         self.warmup_steps = warmup_steps
-        self.global_step = 0
         self.eval_steps = eval_steps
         self.seed = seed
-        self.best_valid_loss = float("inf")
+        print(f"      scheduler: cosine, warmup={min(warmup_steps, max(1, self.total_steps // 10))} "
+              f"/ {self.total_steps} total steps")
 
     def train_epoch(self, loader: DataLoader, epoch: int) -> float:
         self.model.train()
         total_loss = 0.0
-        for batch in loader:
+        running = 0.0  # running-avg loss for a smoother signal than a single batch
+        t0 = time.time()
+        pbar = tqdm(
+            loader,
+            desc=f"epoch {epoch+1}/{self.max_epochs}",
+            leave=True,
+            dynamic_ncols=True,
+        )
+        for i, batch in enumerate(pbar):
             batch = {k: v.to(device) for k, v in batch.items()}
             outputs = self.model(**batch, use_cache=False)
             loss = outputs.loss
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
-            total_loss += loss.item()
+            self.scheduler.step()      # per-step schedule (warmup + cosine)
+            self.optimizer.zero_grad()
             self.global_step += 1
 
-            if self.global_step % 100 == 0:
-                print(f"  Step {self.global_step}: loss={loss.item():.4f}")
+            batch_loss = loss.item()
+            total_loss += batch_loss
+            running = batch_loss if i == 0 else 0.9 * running + 0.1 * batch_loss
+            lr = self.scheduler.get_last_lr()[0]
+
+            # live in-bar readout every step; periodic printed line for logs
+            pbar.set_postfix(loss=f"{running:.4f}", lr=f"{lr:.2e}")
+            if self.global_step % self.log_every == 0:
+                tqdm.write(
+                    f"  step {self.global_step}/{self.total_steps}  "
+                    f"loss={running:.4f}  lr={lr:.2e}"
+                )
 
         avg_loss = total_loss / len(loader)
-        print(f"Epoch {epoch+1}/{self.scheduler.T_max}: avg loss={avg_loss:.4f}")
+        dt = time.time() - t0
+        print(f"Epoch {epoch+1}/{self.max_epochs}: avg loss={avg_loss:.4f}  "
+              f"({dt/60:.1f} min, {len(loader)/max(dt,1e-9):.2f} it/s)")
         return avg_loss
 
     def validate(self, loader: DataLoader) -> float:
         self.model.eval()
         total_loss = 0.0
         with torch.no_grad():
-            for batch in loader:
+            for batch in tqdm(loader, desc="validating", leave=False, dynamic_ncols=True):
                 batch = {k: v.to(device) for k, v in batch.items()}
                 outputs = self.model(**batch, use_cache=False)
                 loss = outputs.loss
@@ -265,24 +362,43 @@ class PuhekieliFineTuner:
 
     def save_checkpoint(self, valid_loss: float, epoch: int):
         if valid_loss < self.best_valid_loss:
+            prev = self.best_valid_loss
             self.best_valid_loss = valid_loss
             save_path = self.out_path / "best.pt"
             self.model.save_pretrained(save_path)
             self.tokenizer.save_pretrained(save_path / "tokenizer")
-            print(f"Saved new best: valid_loss={valid_loss:.4f}")
+            delta = "" if prev == float("inf") else f" (was {prev:.4f})"
+            print(f"  ✓ new best valid_loss={valid_loss:.4f}{delta} -> saved to {save_path}")
+        else:
+            print(f"  · no improvement (valid_loss={valid_loss:.4f}, "
+                  f"best={self.best_valid_loss:.4f}) -> not saving")
 
-    def fit(self, max_epochs: int = 2):
+    def fit(self, max_epochs: int = None):
+        max_epochs = max_epochs or self.max_epochs
+        if self.dry_run:
+            print("\n[dry-run] nothing to train. exiting.")
+            return self.best_valid_loss
+        print("\n" + "=" * 64)
+        print(f"Training: {max_epochs} epoch(s), {self.total_steps} total steps")
+        print("=" * 64)
+        t_start = time.time()
         for epoch in range(max_epochs):
             train_loss = self.train_epoch(self.train_loader, epoch)
             valid_loss = self.validate(self.valid_loader)
             self.save_checkpoint(valid_loss, epoch)
-            self.scheduler.step()
 
         # Final save
         final_path = self.out_path / "final.pt"
         self.model.save_pretrained(final_path)
         self.tokenizer.save_pretrained(final_path / "tokenizer")
-        print(f"Saved final to {final_path}")
+        total_min = (time.time() - t_start) / 60
+        print("\n" + "=" * 64)
+        print("Done.")
+        print(f"  best valid loss : {self.best_valid_loss:.4f}")
+        print(f"  best checkpoint : {self.out_path / 'best.pt'}")
+        print(f"  final checkpoint: {final_path}")
+        print(f"  wall-clock      : {total_min:.1f} min")
+        print("=" * 64)
         return self.best_valid_loss
 
 
@@ -298,6 +414,10 @@ def main():
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--max-len", type=int, default=512)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--log-every", type=int, default=20,
+                        help="print a loss/lr line every N optimizer steps")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="load data + print config/example, then exit (no model load, no training)")
 
     args = parser.parse_args()
     set_seed(args.seed)
@@ -314,6 +434,8 @@ def main():
         lora_r=args.lora_r,
         max_len=args.max_len,
         seed=args.seed,
+        log_every=args.log_every,
+        dry_run=args.dry_run,
     )
 
     trainer.fit()

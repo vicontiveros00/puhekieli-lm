@@ -54,15 +54,22 @@ Personal project, public-web fair game. Four sources, all `active` in
   Fine-tune command documented in `README.md` (Qwen/Qwen3-4B, 2 epochs, batch 2,
   max-len 512). `finetune` extra added (`transformers`, `peft`); confirmed
   importable on M4 Pro.
+- [x] `finetune.py` observability + scheduler fix (2026-07-22): config banner, data
+  summary, decoded example, per-step tqdm w/ loss+lr, `--log-every`, `--dry-run`,
+  checkpoint feedback, final recap; fixed warmup/scheduler no-op (now per-step cosine
+  w/ warmup) + missing `zero_grad`. Smoke-tested (loss 4.78→2.58, adapter saved).
+  See DECISIONS 2026-07-22.
 
 ## Next up
 **Phase 5 fine-tune has NOT completed yet.** Concrete steps:
 
 1. Commit the pending work first (review the diff): `scripts/finetune.py` was
    reworked from seq2seq → causal-LM (chat-template formatting, `Translate to
-   Finnish:` prompts, `DataCollatorForLanguageModeling`).
-2. Run the Phase 5 fine-tune command (see `README.md`) and confirm it actually
-   writes weights — the three `checkpoints/*` dirs (`qwen2.5-1.5b-lora-2e-2ep`,
+   Finnish:` prompts, `DataCollatorForLanguageModeling`); a later pass added
+   observability + fixed the scheduler (see DECISIONS 2026-07-22).
+2. Run the Phase 5 fine-tune command (see `README.md`) — use `--dry-run` first to
+   sanity-check config/data, then the real run — and confirm it actually writes
+   weights. The three `checkpoints/*` dirs (`qwen2.5-1.5b-lora-2e-2ep`,
    `llama3.2-3b-lora-2e-2ep`, `qwen3-4b-lora-2e-2ep`) are all **empty** (runs were
    set up but produced nothing).
 3. Once a checkpoint exists, evaluate with `scripts/chat.py` + `eval.puhekieli_score`

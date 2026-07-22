@@ -2,6 +2,28 @@
 
 > Append-only log of non-obvious choices and *why*. Newest at top.
 
+## 2026-07-22 — finetune.py: observability pass + scheduler fix
+Made `scripts/finetune.py` keep the user in the loop and fixed a latent training bug.
+- **Observability (no behaviour change):** startup config banner; data-composition
+  summary (FI-only vs synthetic train/valid); one decoded chat-template example;
+  per-step `tqdm` bar with live running-avg `loss` + `lr` postfix; periodic
+  `step N/total` log lines (`--log-every`, default 20); honest checkpoint feedback
+  (“new best → saved” vs “no improvement → not saving”); final recap (best loss,
+  paths, wall-clock). Added `--dry-run` (load data + print config/example, then
+  exit) for fast sanity checks without a model download.
+- **Scheduler fix (does change training dynamics):** the old
+  `CosineAnnealingLR(T_max=max_epochs)` stepped once per *epoch* and `warmup_steps`
+  was stored but never applied — so LR barely moved and there was no warmup. Now uses
+  `get_cosine_schedule_with_warmup` stepping once per *optimizer step* over the full
+  `steps_per_epoch * epochs`, warmup = `min(warmup_steps, total_steps//10)`. Also
+  added `optimizer.zero_grad()` in the loop (was missing — grads accumulated across
+  steps, another latent bug).
+- **Honest LoRA failure:** narrowed the swallow-all `except` to `ImportError` with a
+  loud warning that full FT of a multi-B model on MPS will likely OOM (was silently
+  “training fully fine-tuned” on any error).
+- Verified with `--dry-run` and a tiny real run (0.5B, loss 4.78→2.58, LoRA adapter
+  saved). Behaviour-changing parts (schedule, zero_grad) are flagged here on purpose.
+
 ## 2026-07-07 — Back-translation model: gpt-oss-20b default (qwen3-14b fallback)
 Tested the LM Studio server (172.20.10.7:1234) for the FI→EN back-translation step.
 After relaxing LM Studio's memory guardrails, **`gpt-oss-20b`** loads and runs best

@@ -111,8 +111,11 @@ uv run python scripts/finetune.py \
 
 Swap `--model` for other bases (`Qwen/Qwen2.5-1.5B-Instruct`,
 `meta-llama/Llama-3.2-3B-Instruct`, …) and rename `--out` to match. Other flags:
-`--lr` (default 2e-4), `--lora-r` (default 16), `--seed` (default 42). Weights land
-in `checkpoints/<name>/` (git-ignored). Chat with a checkpoint via `scripts/chat.py`.
+`--lr` (default 2e-4), `--lora-r` (default 16), `--seed` (default 42),
+`--log-every N` (loss/lr log cadence, default 20 steps), and `--dry-run` (load the
+data, print the config + a formatted example, then exit — handy for sanity-checking
+before a long run). Weights land in `checkpoints/<name>/` (git-ignored). Chat with a
+checkpoint via `scripts/chat.py`.
 
 ## Project layout
 
