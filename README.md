@@ -1,7 +1,6 @@
 # puhekieli-llm
 
-**Teaching a small LLM to translate English → *spoken* Finnish (puhekieli)** — a
-personal holiday experiment. Off-the-shelf models translate EN→FI into the formal
+**Teaching a small LLM to translate English → *spoken* Finnish (puhekieli)** Off-the-shelf models translate EN→FI into the formal
 written standard (**kirjakieli**). The goal here is the register people actually
 *speak*: **puhekieli**. Let's see how far a from-scratch + LoRA model on an M4 Pro
 can get.
@@ -102,20 +101,45 @@ Requires `uv sync --extra finetune`.
 
 ```bash
 uv run python scripts/finetune.py \
-  --model Qwen/Qwen3-4B \
+  --model Qwen/Qwen3-0.6B \
   --fi-data data/clean/genius_rap.jsonl \    # FI-only flavor lines
   --fi-en  data/clean/rap_synthetic.jsonl \  # parallel EN→FI pairs
-  --out    checkpoints/qwen3-4b-lora-2e-2ep \
+  --out    checkpoints/qwen3-0.6b-lora-2e-2ep \
   --epochs 2 --batch 2 --max-len 512
 ```
 
-Swap `--model` for other bases (`Qwen/Qwen2.5-1.5B-Instruct`,
-`meta-llama/Llama-3.2-3B-Instruct`, …) and rename `--out` to match. Other flags:
+Swap `--model` for other bases (`Qwen/Qwen3-4B`, `Qwen/Qwen2.5-1.5B-Instruct`,
+`meta-llama/Llama-3.2-3B-Instruct`, …) and rename `--out` to match. Prefer a plain
+causal-LM base — e.g. Qwen3.5-0.8B is a *multimodal* `Qwen3_5ForConditionalGeneration`
+and won't load cleanly here. Other flags:
 `--lr` (default 2e-4), `--lora-r` (default 16), `--seed` (default 42),
 `--log-every N` (loss/lr log cadence, default 20 steps), and `--dry-run` (load the
 data, print the config + a formatted example, then exit — handy for sanity-checking
-before a long run). Weights land in `checkpoints/<name>/` (git-ignored). Chat with a
-checkpoint via `scripts/chat.py`.
+before a long run). Weights land in `checkpoints/<name>/` (git-ignored).
+
+A first run on **Qwen/Qwen3-0.6B** (2 epochs, ~197 min on an M4 Pro) reached best
+validation loss **2.21**. It produces spoken forms (“mä”/“oon”/“sä”) but output is
+loose at this tiny size — signal, not a finished translator.
+
+## Inference / chat (Phase 5)
+
+`scripts/chat.py` loads the base model and applies your LoRA adapter on top,
+using the same chat template as training.
+
+```bash
+# translate one sentence
+uv run python scripts/chat.py \
+  --base Qwen/Qwen3-0.6B \
+  --adapter checkpoints/qwen3-0.6b-lora-2e-2ep/best.pt \
+  "I'm going to the club tonight, are you with me?"
+
+# baseline comparison: raw base model, no adapter (expect more formal kirjakieli)
+uv run python scripts/chat.py --base Qwen/Qwen3-0.6B "I'm going to the club tonight, are you with me?"
+```
+
+Omit the prompt for interactive mode. Flags: `--max-len`, `--temperature` (0.6),
+`--top-p` (0.9), `--repetition-penalty` (1.3). See `TEST_MODEL.txt` at the repo
+root for copy-paste-ready commands.
 
 ## Project layout
 

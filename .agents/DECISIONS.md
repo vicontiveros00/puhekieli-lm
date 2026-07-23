@@ -1,121 +1,88 @@
 # DECISIONS
 
 > Append-only log of non-obvious choices and *why*. Newest at top.
+> Older entries compacted 2026-07-23 — kept the *why*, dropped the play-by-play.
+
+## 2026-07-23 — First fine-tune on Qwen3-0.6B; chat.py rewritten for LoRA
+- **Base = Qwen/Qwen3-0.6B** (not Qwen3.5-0.8B): the 0.8B is a *multimodal*
+  `Qwen3_5ForConditionalGeneration`, not a plain causal LM — less portable and won't
+  load cleanly via `AutoModelForCausalLM`. Picked the smallest solid text-only base
+  for a side project. First run: 2 epochs, batch 2, max-len 512, ~197 min on M4 Pro;
+  valid loss 2.2721 → **2.2056** (still dropping → more epochs may help). Adapter in
+  `checkpoints/qwen3-0.6b-lora-2e-2ep/`. Output is real puhekieli (“mä”/“oon”/“sä”)
+  but loose at this size — signal, not a finished translator.
+- **`chat.py` rewritten:** old version loaded the LoRA checkpoint as a *full* model
+  (it's only an adapter), skipped the training chat template, and used fragile
+  fp16 + `device_map="auto"`. Now loads base + applies adapter via PEFT, uses the
+  chat template, decodes only new tokens, strips Qwen3's empty `<think>` block, adds
+  `--repetition-penalty`, and supports a no-adapter **baseline** mode for comparison.
 
 ## 2026-07-22 — finetune.py: observability pass + scheduler fix
-Made `scripts/finetune.py` keep the user in the loop and fixed a latent training bug.
-- **Observability (no behaviour change):** startup config banner; data-composition
-  summary (FI-only vs synthetic train/valid); one decoded chat-template example;
-  per-step `tqdm` bar with live running-avg `loss` + `lr` postfix; periodic
-  `step N/total` log lines (`--log-every`, default 20); honest checkpoint feedback
-  (“new best → saved” vs “no improvement → not saving”); final recap (best loss,
-  paths, wall-clock). Added `--dry-run` (load data + print config/example, then
-  exit) for fast sanity checks without a model download.
-- **Scheduler fix (does change training dynamics):** the old
-  `CosineAnnealingLR(T_max=max_epochs)` stepped once per *epoch* and `warmup_steps`
-  was stored but never applied — so LR barely moved and there was no warmup. Now uses
-  `get_cosine_schedule_with_warmup` stepping once per *optimizer step* over the full
-  `steps_per_epoch * epochs`, warmup = `min(warmup_steps, total_steps//10)`. Also
-  added `optimizer.zero_grad()` in the loop (was missing — grads accumulated across
-  steps, another latent bug).
-- **Honest LoRA failure:** narrowed the swallow-all `except` to `ImportError` with a
-  loud warning that full FT of a multi-B model on MPS will likely OOM (was silently
-  “training fully fine-tuned” on any error).
-- Verified with `--dry-run` and a tiny real run (0.5B, loss 4.78→2.58, LoRA adapter
-  saved). Behaviour-changing parts (schedule, zero_grad) are flagged here on purpose.
+Kept the user in the loop and fixed latent training bugs.
+- **Observability (no behaviour change):** config banner; data-composition summary;
+  one decoded example; per-step `tqdm` with live loss/lr; periodic log lines
+  (`--log-every`); honest checkpoint feedback; final recap; `--dry-run` (load data +
+  print config, then exit).
+- **Scheduler fix (changes training dynamics):** old `CosineAnnealingLR(T_max=epochs)`
+  stepped per *epoch* and `warmup_steps` was never applied → now
+  `get_cosine_schedule_with_warmup` stepping per *optimizer step*, warmup =
+  `min(warmup_steps, total_steps//10)`. Also added the missing `optimizer.zero_grad()`
+  (grads had been accumulating across steps).
+- **Honest LoRA failure:** narrowed swallow-all `except` → `ImportError` with a loud
+  OOM warning (was silently claiming "training fully fine-tuned" on any error).
+
+## 2026-07-07 — Project goal: EN → puhekieli (spoken), not kirjakieli
+Deliberately target everyday **spoken** Finnish, not formal written Finnish — it's
+the harder, more useful register. Consequences: training data must be spoken/
+colloquial; eval must reward spoken features (mä/sä/me-passive/ne/contractions), not
+just grammaticality (a kirjakieli BLEU reference would penalize success); no single
+canonical puhekieli, so we pick a general everyday style and accept variation.
+
+## 2026-07-07 — Data sources: subtitles + OPUS + rap + synthetic back-translation
+Four complementary sources: **`opensubtitles_enfi`** (HF-streamed) = base EN→FI signal
+(dialogue register); **`opus_100`** (HF-streamed) = broad mixed-domain pairs;
+**`genius_rap`** (Gettomasa/JVG/Ibe/Etta/Costi) = the target Helsinki puhekieli
+register but FI-only; **`rap_synthetic`** = the bridge — back-translate each real
+lyric FI→EN locally, then train on (synthetic EN → real FI). FI target is always
+authentic (input noise ≪ output noise), so the model learns to *produce* genuine
+puhekieli. Standard low-resource MT trick; this is what actually teaches rap register.
+
+## 2026-07-07 — Genius scraping blocked → curated seed + HF-streamed pairs
+Genius gates lyric HTML behind Cloudflare Private Access Tokens (Apple hardware
+attestation) — no automation beats it (lyricsgenius/curl_cffi/Playwright all 403 or
+loop). So **`genius_rap` is a curated seed**: the JSON API lists song URLs only; you
+paste favourite lines into `data/raw/genius_rap/<artist>.txt` (fewer but authentic,
+zero arms race). Parallel corpora stream from HF (subtitles + OPUS-100) instead of
+big moses zips — lighter on disk, no custom loaders.
 
 ## 2026-07-07 — Back-translation model: gpt-oss-20b default (qwen3-14b fallback)
-Tested the LM Studio server (172.20.10.7:1234) for the FI→EN back-translation step.
-After relaxing LM Studio's memory guardrails, **`gpt-oss-20b`** loads and runs best
-on this box (MXFP4 quant → memory-light despite "20b"). **Chosen as default.**
-- Both candidates are reasoning models and return empty `content` unless allowed to
-  finish thinking. Fixes in `back_translate_line`:
-  - big token budget (`_MAX_TOKENS=1024`) so gpt-oss reaches its answer
-    (was `finish_reason=length` → empty at 256).
-  - `reasoning_effort=low` to keep it brief.
-  - qwen-style models additionally get `/no_think` appended (skips reasoning; faster).
-  - `_strip_output` removes leaked `think:<...>` blocks and smart/plain wrapping quotes.
-- Quality (hard Helsinki slang) is ~tied: gpt-oss phrasing slightly more natural
-  ("heading out for a gig", keeps "Stadi"), qwen a touch more literal. Both miss
-  *friidu*=girl. gpt-oss ~11s/line (reasoning budget), qwen ~6s/line.
-- Swappable via `LMSTUDIO_MODEL` env; default in `config.py`. LM Studio unloads on
-  idle → first call reloads (brief lag).
-
-## 2026-07-07 — Data sources: OpenSubtitles + Genius rap + synthetic back-translation
-Personal project, public web is fair game. Three complementary sources:
-- **`opensubtitles_enfi`** (OpenSubtitles EN-FI, HF-streamed) = the base translation
-  signal. Real EN→FI pairs, dialogue register (leans colloquial but translator-normalized).
-- **`opus_100`** (OPUS-100 EN-FI, HF-streamed) = broad mixed-domain pairs for general
-  translation ability, complementing the subtitle dialogue.
-- **`genius_rap`** (Gettomasa, JVG, Ibe, Etta, Costi) = the target register — young
-  Helsinki puhekieli/slang — but FI-only, so it can't train a translator alone.
-- **`rap_synthetic`** = the bridge. We back-translate each real lyric FI→EN with a
-  local LLM (LM Studio), then train on (synthetic EN → real FI). The FI target is
-  always authentic, so the model learns to *produce* genuine puhekieli; only the
-  English input is synthetic (input noise ≪ output noise). Standard low-resource MT
-  trick, and the thing that actually teaches rap-register output (vs. tokenizer/eval
-  which only make slang representable/measurable).
-How they combine: subtitles give broad ability; synthetic rap pairs push output
-toward hard Helsinki register; rap lyrics also seed the tokenizer + puhekieli eval.
-
-## 2026-07-07 — Genius scraping is blocked; curated seed + HF-streamed pairs
-Genius gates all lyric-page HTML behind Cloudflare **Private Access Tokens** (Apple
-hardware attestation). No automation beats it: `lyricsgenius` (403), `curl_cffi`
-(all impersonation targets 403), and Playwright (headless + headed + stealth) all
-loop on the challenge — the browser console literally requests a "Private Access
-Token challenge". The Genius **JSON API** (`api.genius.com`) still works but returns
-metadata only (no lyric text). lyrics.ovh covers ~1/15 Finnish rap tracks. Decisions:
-- **`genius_rap` is now a curated seed**: `fetch_genius_metadata()` uses the API to
-  list song URLs per artist; you paste favourite lines into
-  `data/raw/genius_rap/<artist>.txt` (gitignored). `clean_genius_lyrics()` parses the
-  seed .txt (one line/line, `#` = song tag). Fewer but authentic + zero arms race;
-  arguably better synthetic pairs than noisy full-song scrapes. Dropped `lyricsgenius`.
-- **OpenSubtitles now streams from HF** (`sentence-transformers/parallel-sentences-opensubtitles`,
-  en-fi) instead of the 870 MB OPUS moses zip — lighter on disk, no script loader.
-- **Added `opus_100`** (`Helsinki-NLP/opus-100`, en-fi) as a second HF-streamed
-  parallel source for broader, mixed-domain translation signal.
+Local LM Studio does the FI→EN back-translation. **`gpt-oss-20b`** runs best here
+(MXFP4 → memory-light) and is the default. Both candidates are reasoning models that
+return empty `content` unless allowed to finish thinking, so `back_translate_line`
+uses a big token budget (1024), `reasoning_effort=low`, `/no_think` for qwen-style,
+and strips leaked think-blocks/quotes. Swappable via `LMSTUDIO_MODEL`. Quality on
+hard slang ~tied; gsoss ~11s/line vs qwen ~6s/line.
 
 ## 2026-07-07 — puhekieli eval is a heuristic, on purpose
 `eval.puhekieli_score` counts spoken markers (mä/sä/ne/me-passive/stadin slangi) vs
-formal ones (minä/sä/hän/olen/menemme) and returns a [-1,1] lean. It's a cheap
-scoreboard, not linguistics — used *alongside* BLEU because BLEU vs a kirjakieli
-reference would penalize the exact spoken forms we want.
+formal ones and returns a [-1,1] lean. A cheap scoreboard, not linguistics — used
+*alongside* BLEU because BLEU vs a kirjakieli reference would penalize the exact
+spoken forms we want.
 
-## 2026-07-07 — Project goal: EN → puhekieli (spoken Finnish), not kirjakieli
-Personal holiday spin-off of the solita-llm template. Standard MT/LLMs translate
-EN→FI into formal written Finnish (kirjakieli). This project deliberately targets
-**puhekieli** (everyday spoken Finnish) because that's the harder, more interesting,
-and more personally useful register. Consequences that shape everything:
-- Training data must be *spoken/colloquial* Finnish (subtitles, forums, transcripts).
-- Eval must reward spoken features (mä/sä/me-passive/ne/contractions), not just
-  grammaticality — a kirjakieli-only BLEU reference would penalize success.
-- There's no single canonical puhekieli; we pick a general everyday style and accept
-  variation.
+## 2026-07-07 — Sources are user-chosen; registry pluggable, nothing active by default
+`config.py::SOURCES` registry carries a Finnish `register` + `status`
+(planned/active/excluded) per source. Nothing is `active` until the user clears it —
+keeps the pipeline honest about license/register and avoids scraping anything the
+owner hasn't chosen.
 
-## 2026-07-07 — Sources are user-chosen; registry is pluggable, nothing active
-This is a personal project, so no corporate sensitivity tiers. Instead `config.py`
-has a `SOURCES` registry where each source carries a Finnish `register` and a
-`status` (planned/active/excluded). Nothing is `active` until the user clears it.
-Rationale: keep the data pipeline honest about license/register and avoid scraping
-anything the owner hasn't chosen.
-
-## 2026-07-07 — Reused the solita-llm scaffold wholesale
-Kept the same shape (uv + Python 3.11, MPS device, `src/<pkg>/config.py` as single
-source of truth, `.agents/` handoff docs, `.pi/prompts/`, `/skill:repo-tasks`,
-two-act narrative) because it works and the owner already knows it. Only the domain
-changed: company-data LM → EN→puhekieli translator. Data schema shifts from single
-`text` docs to parallel `{en, fi, register}` records.
-
-## 2026-07-07 — Python 3.11 + uv + MPS (inherited)
-Same reasoning as the template: 3.11 is the ML-lib sweet spot; uv for reproducible
-envs; torch on Apple Metal (MPS), model sizes chosen to fit 24GB unified memory
-(Act 1: ~10–50M params). Device auto-selects MPS→CUDA→CPU.
+## 2026-07-07 — Reused the solita-llm scaffold; inherited stack
+Kept the template's shape (uv + Python 3.11, MPS device auto-select MPS→CUDA→CPU,
+`src/<pkg>/config.py` as single source of truth, `.agents/` handoff docs, two-act
+narrative) because it works and the owner knows it. 3.11 is the ML-lib sweet spot;
+model sizes fit 24GB unified memory (Act 1: ~10–50M params). Only the domain changed:
+company-data LM → EN→puhekieli translator; schema shifts to parallel `{en, fi, register}`.
 
 ## 2026-07-07 — Phase 1 executed: cleaned rap lyrics + synthetic back-translation
-After gathering manual rap lyric cuts (Costi, Gettomasa, JVG, Ibe, Etta) into
-`data/clean/genius_rap.jsonl` (6,016 puhekieli lines), ran back-translation via LM
-Studio (`gpt-oss-20b`) to build `rap_synthetic.jsonl`. Test sample (90 pairs) shows:
-- Translation quality: high (FI: authentic puhekieli; EN: natural English back-translation).
-- Puhekieli spoken-leaning rate: ≈59% on sample (acceptable mix of formal drift with
-  authentic rap register) — cleaned rap lyrics + puhekieli model already lean spoken.
-Next: raise `limit` to corpus scale (~6K) and proceed to Phase 2 tokenizer.
+Built `genius_rap.jsonl` (6,016 puhekieli lines) and back-translated via `gpt-oss-20b`
+into `rap_synthetic.jsonl`. Sample (90 pairs): FI authentic puhekieli, EN natural;
+≈59% spoken-leaning (acceptable mix). Then scaled to full corpus.

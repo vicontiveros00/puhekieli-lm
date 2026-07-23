@@ -1,0 +1,40 @@
+TEST THE FINE-TUNED PUHEKIELI MODEL
+===================================
+
+All commands: run from the project root, single line each.
+
+1) Translate one sentence (base Qwen3-0.6B + your LoRA adapter):
+
+uv run python scripts/chat.py --base Qwen/Qwen3-0.6B --adapter checkpoints/qwen3-0.6b-lora-2e-2ep/best.pt "I'm going to the club tonight, are you with me?"
+
+
+2) Try your own sentence (just change the text in quotes):
+
+uv run python scripts/chat.py --base Qwen/Qwen3-0.6B --adapter checkpoints/qwen3-0.6b-lora-2e-2ep/best.pt "Do you want to grab a beer after work?"
+
+
+3) Interactive (omit the prompt; it will ask you to type one):
+
+uv run python scripts/chat.py --base Qwen/Qwen3-0.6B --adapter checkpoints/qwen3-0.6b-lora-2e-2ep/best.pt
+
+
+4) BASELINE COMPARISON - raw base model, NO adapter (see the difference the
+   fine-tune made; expect more formal kirjakieli here):
+
+uv run python scripts/chat.py --base Qwen/Qwen3-0.6B "I'm going to the club tonight, are you with me?"
+
+
+OPTIONAL FLAGS (append to any command above):
+  --max-len 120              longer output (default 128 new tokens)
+  --temperature 0.4          lower = more focused/less random (default 0.6)
+  --top-p 0.9                nucleus sampling (default 0.9)
+  --repetition-penalty 1.3   higher = fewer repeated loops (default 1.3)
+
+
+WHAT TO LOOK FOR (puhekieli vs kirjakieli):
+  spoken (want)  : ma / maa, oon, sä, me mennään, ne
+  formal (avoid) : mina, olen, sina, me menemme, he
+
+NOTE: this is a tiny 0.6B model with a light LoRA. It will produce spoken forms
+but output is loose and can drift. That's expected at this size - it's a signal
+for the project, not a finished translator.
